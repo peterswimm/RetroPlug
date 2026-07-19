@@ -39,8 +39,9 @@ The rules below are the parts that don't fit those.
   format-neutral core (`DistrhoPlugin.cpp`) plus its OWN `DistrhoPluginInfo.h`, building no plugin
   format at all, to drive `PluginExporter::reinitParameters` over a toy plugin.
 - **`deps/sameboy` is patched at configure — a dirty working tree there is
-  EXPECTED, not stray changes.** The per-channel (4-stem) Game Boy audio tap lives
-  in `Core/apu.{c,h}` and ships as a tracked patch
+  EXPECTED, not stray changes.** The per-channel (4-stem) Game Boy audio tap AND
+  the APU register-write tap (the "GB Note Out" MIDI source — see
+  [docs/lsdj.md](docs/lsdj.md)) live in `Core/apu.{c,h}` and ship as one tracked patch
   ([cmake/patches/sameboy-per-channel-audio.patch](cmake/patches/sameboy-per-channel-audio.patch)),
   applied idempotently at configure by
   [cmake/sameboy.cmake](cmake/sameboy.cmake) via `git apply` (it uses
