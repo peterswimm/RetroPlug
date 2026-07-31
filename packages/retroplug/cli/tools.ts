@@ -33,6 +33,7 @@ import { n8PlayTool } from "./sessions/n8-play";
 import { analyzeCaptureTool } from "./sessions/analyze-capture";
 import { grabFrameTool } from "./sessions/grab-frame";
 import { launchpadProbeTool } from "./sessions/launchpad-probe";
+import { linksyncTool } from "./sessions/linksync";
 
 /** Every baked-in command. The ONLY place a new tool is registered. */
 export const tools: CliTool[] = [
@@ -49,6 +50,7 @@ export const tools: CliTool[] = [
   analyzeCaptureTool,
   grabFrameTool,
   launchpadProbeTool,
+  linksyncTool,
 ];
 
 /** The top-level command index: a version banner + the tools' own name/summary (column-aligned). Pure — the
