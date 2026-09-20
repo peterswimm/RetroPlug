@@ -98,6 +98,10 @@ import { getTransport, setTransport, setClockBpm, CLOCK_BPM_STEP, CLOCK_BPM_COAR
 import { getN8Config, setN8Port, connectN8, setN8Lookahead, type N8Config } from "./n8Devices";
 import { getN8SdStatus, n8LoadRom, n8DumpSram, n8RestoreSram, type N8SdStatus } from "./n8SdOps";
 import {
+  getGameBoyLinkConfig, setGameBoyLinkPort, setGameBoyLinkAdapter, connectGameBoyLink,
+  setGameBoyLinkLookahead, setGameBoyLinkMode, type GameBoyLinkConfig,
+} from "./gameBoyLinkDevices";
+import {
   getLaunchpadConfig, setLaunchpadPorts, connectLaunchpad, looksLikeLaunchpad, type LaunchpadConfig,
 } from "./launchpadDevices";
 import { ControllerRegistry, registerControllerApps, QUANTISE_VALUES, type Quantise } from "../../../src/controller";
@@ -297,6 +301,35 @@ function midiSettingsChildren(): MenuItem[] {
 // SD row (useN8SdWatch keeps it live). Those appear only once the link is up (see the gate below). One job at
 // a time - every action is disabled while one runs.
 const N8_LOOKAHEADS = [0, 5, 10, 15, 20, 30, 50];
+const GB_LINK_MODES = ["Off", "MIDI Sync", "MIDI Sync (Arduinoboy)", "MIDI Map", "Keyboard", "Keyboard MIDI", "MIDI Passthrough"];
+
+function gameBoyLinkMenuChildren(cfg: GameBoyLinkConfig): MenuItem[] {
+  const values = cfg.ports.map((p) => p.port);
+  const names = [...values];
+  let portIndex = Math.max(0, values.indexOf(cfg.selectedPort));
+  if (cfg.selectedPort && !values.includes(cfg.selectedPort)) {
+    names.push(`${cfg.selectedPort} (not connected)`);
+    portIndex = names.length - 1;
+  }
+  if (names.length === 0) names.push("No serial ports");
+  const lookaheads = [0, 5, 10, 15, 20, 30, 50];
+  const status = cfg.connected
+    ? `Streaming (${cfg.bytesSent} tx / ${cfg.bytesReceived} rx)`
+    : cfg.error ? `Error: ${cfg.error}` : "Off";
+  return [
+    cycler("gblink-adapter", "Adapter", ["Chromatic", "GBLink (raw UART)"], cfg.adapter === "gblink" ? 1 : 0,
+      (n) => setGameBoyLinkAdapter(n === 1 ? "gblink" : "chromatic")),
+    cycler("gblink-port", "Port", names, portIndex, (n) => setGameBoyLinkPort(values[n] ?? cfg.selectedPort)),
+    cycler("gblink-mode", "Link Mode", GB_LINK_MODES, Math.min(cfg.linkMode, GB_LINK_MODES.length - 1), setGameBoyLinkMode),
+    cycler("gblink-lookahead", "Lookahead", lookaheads.map((n) => `${n} ms`),
+      Math.max(0, lookaheads.indexOf(cfg.lookaheadMs)), (n) => setGameBoyLinkLookahead(lookaheads[n])),
+    action("gblink-connect", cfg.enabled ? "Disconnect" : "Connect", () => connectGameBoyLink(!cfg.enabled), values.length === 0),
+    sep("gblink-status-sep"),
+    action("gblink-framing", `UART: ${cfg.baudRate} ${cfg.dataBits}${cfg.parity === "none" ? "N" : cfg.parity[0].toUpperCase()}${cfg.stopBits}`, () => {}, true),
+    action("gblink-status", `Status: ${status}`, () => {}, true),
+    ...(cfg.dropped || cfg.errors ? [action("gblink-errors", `Dropped ${cfg.dropped}, errors ${cfg.errors}`, () => {}, true)] : []),
+  ];
+}
 
 // A physical N8 counts as "here" only when one is actually enumerated (a serial port flagged isN8 by its USB
 // VID:PID). null cfg = the host lacks the seam (headless harness). Gates whether the whole submenu renders.
@@ -2171,6 +2204,7 @@ export function buildInstanceMenu(ctx: MenuContext): MenuTree {
   const tracker = resolveTracker(sys.roles);
   const n8cfg = getN8Config();     // null without the seam; enumerates ports + link state fresh each render
   const n8Here = n8Detected(n8cfg); // true only when a physical N8 is attached -> the submenu renders
+  const gbLinkCfg = getGameBoyLinkConfig();
   // Launchpad: null without the seam (a DAW / the harness). Unlike N8 there is no detection gate - see
   // launchpadMenuChildren for why a TRS-attached surface is invisible to any name-based test.
   const lpcfg = getLaunchpadConfig();
@@ -2188,7 +2222,7 @@ export function buildInstanceMenu(ctx: MenuContext): MenuTree {
       // when the cart sniffed one; N8 Pro only when a physical N8 is actually detected (n8Here) - it drives a
       // real NES, so it belongs beside the trackers, not buried in Settings, but there's nothing to show without
       // the hardware.
-      ...(tracker || n8Here || lpcfg
+      ...(tracker || n8Here || lpcfg || gbLinkCfg
         ? [
             sep("inst-sep-tracker"),
             ...(tracker
@@ -2200,6 +2234,7 @@ export function buildInstanceMenu(ctx: MenuContext): MenuTree {
               : []),
             ...(lpcfg ? [submenu("inst-launchpad", "Launchpad", launchpadMenuChildren(ctx, lpcfg))] : []),
             ...(n8Here ? [submenu("inst-n8", "N8 Pro", n8MenuChildren(ctx, n8cfg!))] : []),
+            ...(gbLinkCfg ? [submenu("inst-gblink", "Game Boy Link", gameBoyLinkMenuChildren(gbLinkCfg))] : []),
           ]
         : []),
       sep("inst-sep-top"),
@@ -2239,6 +2274,7 @@ export function buildInstanceMenu(ctx: MenuContext): MenuTree {
 export function buildStartMenu(ctx: MenuContext): MenuTree {
   const n8cfg = getN8Config();
   const n8Here = n8Detected(n8cfg); // shown only when a physical N8 is actually attached
+  const gbLinkCfg = getGameBoyLinkConfig();
   return {
     title: ctx.version ? `RetroPlug v${ctx.version}` : "RetroPlug",
     items: [
@@ -2249,6 +2285,7 @@ export function buildStartMenu(ctx: MenuContext): MenuTree {
       // streaming + SD ops don't need a loaded system, so it belongs here too (configure/connect the cart, or
       // load a ROM onto it, before opening anything in RetroPlug). Only when a cart is actually detected.
       ...(n8Here ? [sep("start-sep-n8"), submenu("start-n8", "N8 Pro", n8MenuChildren(ctx, n8cfg!))] : []),
+      ...(gbLinkCfg ? [sep("start-sep-gblink"), submenu("start-gblink", "Game Boy Link", gameBoyLinkMenuChildren(gbLinkCfg))] : []),
       sep("start-sep0"),
       submenu("start-project", "Project", projectChildren(ctx)),
       submenu("start-settings", "Settings", settingsChildren(ctx)),

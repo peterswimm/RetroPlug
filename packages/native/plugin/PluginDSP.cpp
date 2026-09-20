@@ -32,6 +32,8 @@
 #include "host/n8/N8Host.hpp"             // physical Everdrive N8 link + config (shared with the SDL standalone)
 #include "host/n8/N8Hooks.hpp"            // binds the __rp_*N8* config hooks (shared)
 #include "host/n8/WjwwoodSerialPort.hpp"  // the serial-port factory + listSerialPorts for the N8 picker
+#include "host/gblink/GameBoyLinkHost.hpp"
+#include "host/gblink/GameBoyLinkHooks.hpp"
 #include "TypedRpcServer.h"
 #include "codecs/QuickJSCodec.h"
 #include "transports/QuickJSTransport.h"
@@ -94,6 +96,16 @@ class PluginDSP : public Plugin {
         [] {
             std::vector<retroplug::N8PortDto> ports;
             for (const auto& p : retroplug::listSerialPorts()) ports.push_back({p.port, p.isN8});
+            return ports;
+        },
+        hostSvc_.configDir()};
+    retroplug::GameBoyLinkHost gameBoyLinkHost_{
+        [](const std::string& p, retroplug::SerialPortSettings s) -> std::unique_ptr<retroplug::ISerialPort> {
+            return std::make_unique<retroplug::WjwwoodSerialPort>(p, s);
+        },
+        [] {
+            std::vector<retroplug::GameBoyLinkPortDto> ports;
+            for (const auto& p : retroplug::listSerialPorts()) ports.push_back({p.port});
             return ports;
         },
         hostSvc_.configDir()};
@@ -405,8 +417,13 @@ private:
         engine_.setCoreByteSink([this](std::uint32_t frame, const std::uint8_t* data, std::size_t size, bool) {
             n8Host_.link().push(frame, data, size, getSampleRate());
         });
+        engine_.setSerialLinkSink([this](SystemId system, std::uint32_t frame, std::uint8_t byte) {
+            gameBoyLinkHost_.link().push(system, frame, byte, getSampleRate());
+        });
         retroplug::bindN8Hooks(ctx, n8Host_);
         n8Host_.restore();
+        retroplug::bindGameBoyLinkHooks(ctx, gameBoyLinkHost_);
+        gameBoyLinkHost_.restore();
 
         // Headless seed: reaper -renderproject sets RETROPLUG_AUTOLOAD_PROJECT to a .rplg path.
         if (const char* autoload = std::getenv("RETROPLUG_AUTOLOAD_PROJECT")) {

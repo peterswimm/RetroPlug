@@ -165,8 +165,10 @@ void Engine::runBlockWithRouter(std::uint32_t frames, const AudioRouter& router)
         pendingControllerMidi_.clear();
         pendingSerialOut_.clear();  // last block's serial-out consumed by the kernel this block
         // serial-in sink → the addressed system's serial FIFO.
-        for (const auto& sv : dsp_.serialIn_)
+        for (const auto& sv : dsp_.serialIn_) {
+            if (serialLinkSink_) serialLinkSink_(sv.system, sv.frame, sv.byte);
             if (SystemBase* t = project_.findSystem(sv.system)) t->pushSerialIn(sv.frame, sv.byte);
+        }
         // core-MIDI sink → the addressed core's onMidi (e.g. the NES N8 FIFO). One ::MidiEvent per entry.
         // A message longer than the inline data[4] (a SysEx, or several messages staged as one run) goes
         // down the core's RAW byte path instead: for the NES that is the same FIFO onMidi feeds, unframed

@@ -68,6 +68,8 @@ extern "C" {
 #include "host/n8/N8Host.hpp"                // shared N8 link + config + n8.cfg (also used by the DAW plugin)
 #include "host/n8/N8Hooks.hpp"               // binds the __rp_*N8* config hooks (shared with the plugin)
 #include "host/n8/WjwwoodSerialPort.hpp"     // the serial-port factory + listSerialPorts for the N8 picker
+#include "host/gblink/GameBoyLinkHost.hpp"
+#include "host/gblink/GameBoyLinkHooks.hpp"
 #include "host/launchpad/LaunchpadHost.hpp"  // control-surface link + config + launchpad.cfg
 #include "host/launchpad/LaunchpadHooks.hpp" // binds the __rp_*Launchpad* config hooks
 #include "host/launchpad/RtMidiPort.hpp"     // the RtMidi in/out pair the link claims exclusively
@@ -249,6 +251,17 @@ struct AppState {
         [] {
             std::vector<retroplug::N8PortDto> ports;
             for (const auto& p : retroplug::listSerialPorts()) ports.push_back({p.port, p.isN8});
+            return ports;
+        },
+        hostSvc.configDir()};
+
+    retroplug::GameBoyLinkHost gameBoyLinkHost{
+        [](const std::string& p, retroplug::SerialPortSettings s) -> std::unique_ptr<retroplug::ISerialPort> {
+            return std::make_unique<retroplug::WjwwoodSerialPort>(p, s);
+        },
+        [] {
+            std::vector<retroplug::GameBoyLinkPortDto> ports;
+            for (const auto& p : retroplug::listSerialPorts()) ports.push_back({p.port});
             return ports;
         },
         hostSvc.configDir()};
@@ -1388,7 +1401,10 @@ bool setupUi(AppState& a) {
     if (ctx) installWindowHooks(ctx);
     // The N8 config hooks (Settings > N8) - bound via the shared helper (same one the plugin uses), carrying
     // this AppState's N8Host. Standalone-only, same gating as the MIDI picker (hasN8() is a typeof check).
-    if (ctx) retroplug::bindN8Hooks(ctx, a.n8Host);
+    if (ctx) {
+        retroplug::bindN8Hooks(ctx, a.n8Host);
+        retroplug::bindGameBoyLinkHooks(ctx, a.gameBoyLinkHost);
+    }
     // The Launchpad config hooks (the instance menu's Launchpad submenu). Standalone-only: the DAW plugin's
     // MIDI seam still caps a message at 4 bytes, and every message here is SysEx.
     if (ctx) retroplug::bindLaunchpadHooks(ctx, a.launchpadHost);
@@ -1693,6 +1709,9 @@ int main(int argc, char** argv) {
                                           std::size_t size, bool /*flush*/) {
         a->n8Host.link().push(frame, data, size, a->sampleRate);
     });
+    app.engine.setSerialLinkSink([a = &app](SystemId system, std::uint32_t frame, std::uint8_t byte) {
+        a->gameBoyLinkHost.link().push(system, frame, byte, a->sampleRate);
+    });
 
     // Autoload a .rplg project before the audio thread takes the Engine (structural build runs direct).
     if (!autoloadPath.empty()) {
@@ -1714,6 +1733,11 @@ int main(int argc, char** argv) {
     if (const auto c = app.n8Host.getConfig(); c.enabled)
         std::fprintf(stderr, "[retroplug-sdl] N8 restore: port '%s'%s\n", c.selectedPort.c_str(),
                      c.connected ? "" : " - not connected");
+
+    app.gameBoyLinkHost.restore();
+    if (const auto c = app.gameBoyLinkHost.getConfig(); c.enabled)
+        std::fprintf(stderr, "[retroplug-sdl] Game Boy link restore: %s on '%s'%s\n", c.adapter.c_str(),
+                     c.selectedPort.c_str(), c.connected ? "" : " - not connected");
 
     // Restore the persisted Launchpad link (the instance menu's Launchpad submenu) and hand app.midi the
     // port it claimed. No stop/start dance here: the audio thread has not been given the Engine yet, so

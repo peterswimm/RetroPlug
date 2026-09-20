@@ -112,6 +112,12 @@ public:
         coreByteSink_ = std::move(sink);
     }
 
+    // Optional mirror of role-generated Game Boy serial-input bytes to a physical link adapter. The target
+    // system and intra-block frame are retained so multi-system projects and timed UART release stay exact.
+    void setSerialLinkSink(std::function<void(SystemId system, std::uint32_t frame, std::uint8_t byte)> sink) {
+        serialLinkSink_ = std::move(sink);
+    }
+
     // --- DSP-runtime allocation/GC profiling (spec/08-profiling.md) ---
     // Forward to the bare JS runtime's counters. Valid only on the Engine's owning thread (the
     // renderAudio pull path); no-op / enabled=false in a non-RETROPLUG_PROFILE build.
@@ -231,6 +237,7 @@ private:
     // Optional external mirror of the core-bytes stream (set by the standalone to reach a physical N8);
     // null in every other host. Called on the audio thread, so the target must be RT-safe (N8Link is).
     std::function<void(std::uint32_t, const std::uint8_t*, std::size_t, bool)> coreByteSink_;
+    std::function<void(SystemId, std::uint32_t, std::uint8_t)> serialLinkSink_;
 
     AudioRouting audioRouting_ = AudioRouting::Stereo;  // output-pair placement; Stereo = all → pair 0
 };

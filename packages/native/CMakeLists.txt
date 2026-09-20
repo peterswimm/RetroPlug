@@ -483,6 +483,9 @@ add_executable(retroplug-sdl
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8Hooks.cpp           # binds the __rp_*N8* config hooks (shared)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8Menu.cpp             # on-device menu (*t/*n/*s) for SD ops (shared)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8SdWorker.cpp         # background worker: ROM upload / SRAM dump+restore
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLink.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLinkHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLinkHooks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/launchpad/LaunchpadLink.cpp   # control-surface in/out pair (own rings)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/launchpad/LaunchpadHost.cpp   # link + config + launchpad.cfg
     ${CMAKE_CURRENT_SOURCE_DIR}/src/host/launchpad/LaunchpadHooks.cpp  # binds the __rp_*Launchpad* config hooks
@@ -545,6 +548,9 @@ dpf_add_plugin(retroplug
         ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8Hooks.cpp          # binds the __rp_*N8* config + SD-op hooks
         ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8Menu.cpp           # on-device menu (*t/*n/*s) for SD ops
         ${CMAKE_CURRENT_SOURCE_DIR}/src/host/n8/N8SdWorker.cpp       # background worker: ROM upload / SRAM dump+restore
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLink.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLinkHost.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/host/gblink/GameBoyLinkHooks.cpp
         ${CP_BUNDLE_C}                # the embedded control-plane bytecode (rp_cp_bundle)
     FILES_UI
         plugin/PluginUI.cpp
@@ -918,6 +924,17 @@ target_include_directories(retroplug-launchpad-test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src)   # host/launchpad/*.hpp + transport/SpscRing.hpp
 
 set_target_properties(retroplug-launchpad-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+add_executable(retroplug-gblink-test EXCLUDE_FROM_ALL
+    test/gblink/GameBoyLink.test.cpp
+    src/host/gblink/GameBoyLink.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(retroplug-gblink-test PRIVATE Catch2::Catch2WithMain Threads::Threads)
+target_include_directories(retroplug-gblink-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set_target_properties(retroplug-gblink-test PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
