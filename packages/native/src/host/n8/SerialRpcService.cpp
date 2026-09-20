@@ -16,8 +16,21 @@ std::vector<SerialPortInfo> SerialRpcService::serialListPorts() {
 }
 
 std::int32_t SerialRpcService::serialOpen(std::string port) {
+    return serialOpenConfigured(std::move(port), 9600, 8, "none", 1);
+}
+
+std::int32_t SerialRpcService::serialOpenConfigured(std::string port, std::uint32_t baudRate,
+                                                     std::uint8_t dataBits, std::string parity,
+                                                     std::uint8_t stopBits) {
     try {
-        auto sp = std::make_unique<WjwwoodSerialPort>(port);
+        SerialPortSettings settings;
+        settings.baudRate = baudRate;
+        settings.dataBits = dataBits;
+        settings.parity = parity == "odd" ? SerialPortSettings::Parity::Odd
+                        : parity == "even" ? SerialPortSettings::Parity::Even
+                                           : SerialPortSettings::Parity::None;
+        settings.stopBits = stopBits == 2 ? SerialPortSettings::StopBits::Two : SerialPortSettings::StopBits::One;
+        auto sp = std::make_unique<WjwwoodSerialPort>(port, settings);
         const std::int32_t handle = nextHandle_++;
         ports_.emplace(handle, std::move(sp));
         return handle;

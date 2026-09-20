@@ -12,12 +12,21 @@ namespace serial { class Serial; }
 
 namespace retroplug {
 
+// Portable serial framing used by every hardware link. Values deliberately mirror wjwwood/serial's
+// public enums without exposing that dependency to callers or tests.
+struct SerialPortSettings {
+    std::uint32_t baudRate = 9600;
+    std::uint8_t  dataBits = 8;
+    enum class Parity : std::uint8_t { None, Odd, Even } parity = Parity::None;
+    enum class StopBits : std::uint8_t { One, Two } stopBits = StopBits::One;
+};
+
 // An ISerialPort backed by wjwwood/serial (deps/serial). Opens the given port at 9600 / 8N1 (baud is
 // irrelevant on the N8's FT245-class USB device). The read timeout is applied per call (Edio only reads
 // during the handshake). The ctor throws serial::IOException if the port can't be opened.
 class WjwwoodSerialPort : public ISerialPort {
 public:
-    explicit WjwwoodSerialPort(const std::string& portName);
+    explicit WjwwoodSerialPort(const std::string& portName, SerialPortSettings settings = {});
     ~WjwwoodSerialPort() override;
 
     bool               isOpen() const;

@@ -200,20 +200,22 @@ export function createDebugClient(): DebugBackend {
  *  if no native RPC surface is bound; `listPorts` returns [] on a host that didn't mount the facet. */
 export function createSerialClient(): SerialClient {
   const call = makeCall();
+  const wrap = (port: string, handle: number): OpenSerialPort => {
+    if (handle < 0) throw new Error(`cannot open serial port: ${port}`);
+    return {
+      port,
+      write: (data: Uint8Array) => call("serialWrite", handle, data) as number,
+      read: (size: number, timeoutMs: number) =>
+        (call("serialRead", handle, size, timeoutMs) as Uint8Array | undefined) ?? new Uint8Array(0),
+      flushInput: () => void call("serialFlush", handle),
+      close: () => void call("serialClose", handle),
+    };
+  };
   return {
     listPorts: () => (call("serialListPorts") as SerialPortInfo[] | undefined) ?? [],
-    open: (port: string): OpenSerialPort => {
-      const handle = call("serialOpen", port) as number;
-      if (handle < 0) throw new Error(`cannot open serial port: ${port}`);
-      return {
-        port,
-        write: (data: Uint8Array) => call("serialWrite", handle, data) as number,
-        read: (size: number, timeoutMs: number) =>
-          (call("serialRead", handle, size, timeoutMs) as Uint8Array | undefined) ?? new Uint8Array(0),
-        flushInput: () => void call("serialFlush", handle),
-        close: () => void call("serialClose", handle),
-      };
-    },
+    open: (port: string): OpenSerialPort => wrap(port, call("serialOpen", port) as number),
+    openConfigured: (port, baudRate, dataBits = 8, parity = "none", stopBits = 1): OpenSerialPort =>
+      wrap(port, call("serialOpenConfigured", port, baudRate, dataBits, parity, stopBits) as number),
   };
 }
 

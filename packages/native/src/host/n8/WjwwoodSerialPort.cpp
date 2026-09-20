@@ -26,10 +26,16 @@ bool hardwareIdIsN8(const std::string& hwid) {
 
 }  // namespace
 
-WjwwoodSerialPort::WjwwoodSerialPort(const std::string& portName) : portName_(portName) {
-    // 9600 / 8N1, no flow control (all serial::Serial defaults except baud). The initial 2000 ms timeout
-    // is a safety net; Edio overrides it per read via read()/setReadTimeout.
-    port_ = std::make_unique<serial::Serial>(portName, 9600, serial::Timeout::simpleTimeout(2000));
+WjwwoodSerialPort::WjwwoodSerialPort(const std::string& portName, SerialPortSettings settings)
+    : portName_(portName) {
+    const auto bytesize = settings.dataBits == 7 ? serial::sevenbits : serial::eightbits;
+    const auto parity = settings.parity == SerialPortSettings::Parity::Odd ? serial::parity_odd
+                      : settings.parity == SerialPortSettings::Parity::Even ? serial::parity_even
+                                                                           : serial::parity_none;
+    const auto stopbits = settings.stopBits == SerialPortSettings::StopBits::Two ? serial::stopbits_two
+                                                                                  : serial::stopbits_one;
+    port_ = std::make_unique<serial::Serial>(portName, settings.baudRate, serial::Timeout::simpleTimeout(2000),
+                                             bytesize, parity, stopbits, serial::flowcontrol_none);
 }
 
 WjwwoodSerialPort::~WjwwoodSerialPort() = default;

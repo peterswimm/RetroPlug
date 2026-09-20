@@ -34,6 +34,11 @@ export interface LinkSyncOpts {
   autoStart: boolean;
   sampleRate: number;
   out?: string;
+  adapter?: "chromatic" | "gblink";
+  serial?: string;
+  live?: boolean;
+  dryRun?: boolean;
+  lookaheadMs?: number;
 }
 
 const DEFAULTS: LinkSyncOpts = {
@@ -44,6 +49,10 @@ const DEFAULTS: LinkSyncOpts = {
   blockMs: 20,
   autoStart: false,
   sampleRate: 44100,
+  adapter: "chromatic",
+  live: false,
+  dryRun: false,
+  lookaheadMs: 0,
 };
 
 /** "1500ms" | "2s" | "500" → milliseconds. */
@@ -76,6 +85,16 @@ export function parseLinkSyncArgs(args: string[]): LinkSyncOpts {
       case "--auto-start": o.autoStart = true; break;
       case "--sample-rate": o.sampleRate = parseInt(next(), 10); break;
       case "--out": o.out = next(); break;
+      case "--adapter": {
+        const adapter = next().toLowerCase();
+        if (adapter !== "chromatic" && adapter !== "gblink") throw new Error(`linksync: unknown adapter '${adapter}'`);
+        o.adapter = adapter;
+        break;
+      }
+      case "--serial": o.serial = next(); break;
+      case "--live": o.live = true; break;
+      case "--dry-run": o.dryRun = true; break;
+      case "--lookahead-ms": o.lookaheadMs = Math.max(0, parseInt(next(), 10)); break;
       default: throw new Error(`linksync: unknown arg '${a}'`);
     }
   }
@@ -122,8 +141,97 @@ export function generateSyncScript(o: LinkSyncOpts): string[] {
   return lines;
 }
 
+export function adapterBytes(adapter: "chromatic" | "gblink", mode: number, bytes: number[]): Uint8Array {
+  if (adapter === "gblink") return Uint8Array.from(bytes);
+  return new TextEncoder().encode(`${formatRpsync(mode, bytes)}\n`);
+}
+
+function runLiveLinkSync(o: LinkSyncOpts): void {
+  if (!o.serial) throw new Error("linksync: --live requires --serial <port>");
+  const adapter = o.adapter ?? "chromatic";
+  if (adapter === "gblink" && o.autoStart)
+    console.log("linksync: GBLink cannot press Start; --auto-start is ignored for this adapter");
+  const call = makeRpcCall();
+  const handle = call("serialOpenConfigured", o.serial, adapter === "gblink" ? 19200 : 115200, 8, "none", 1) as number;
+  if (handle < 0) throw new Error(`cannot open serial port: ${o.serial}`);
+  const port = {
+    write: (bytes: Uint8Array) => call("serialWrite", handle, bytes) as number,
+    read: (size: number, timeout: number) => (call("serialRead", handle, size, timeout) as Uint8Array | undefined) ?? new Uint8Array(),
+    close: () => void call("serialClose", handle),
+  };
+  const bridge = new LinkSyncBridge();
+  const frames = Math.max(1, Math.round((o.sampleRate * o.blockMs) / 1000));
+  const beats = frames / ((o.sampleRate * 60) / o.bpm);
+  const started = Date.now();
+  let nextBlock = started;
+  let ppq = 0;
+  let sent = 0;
+  let received = 0;
+  const queue: { due: number; bytes: number[] }[] = [];
+  (globalThis as { __rp_keepAlive?: () => void }).__rp_keepAlive?.();
+  declareTimer(() => {
+    const now = Date.now();
+    while (now >= nextBlock && nextBlock - started < o.durationMs) {
+      const result = bridge.processBlock({ frames, sampleRate: o.sampleRate, tempo: o.bpm, ppqStart: ppq, transport: true },
+        { mode: o.mode, tempoDivisor: o.divisor, autoStart: !!o.autoStart && adapter === "chromatic" });
+      if (result.pressStart) queue.push({ due: now + (o.lookaheadMs ?? 0), bytes: [] });
+      if (result.events.length) queue.push({ due: now + (o.lookaheadMs ?? 0), bytes: result.events.map((e) => e.byte) });
+      ppq += beats;
+      nextBlock += o.blockMs;
+    }
+    while (queue.length && queue[0].due <= now) {
+      const item = queue.shift()!;
+      if (item.bytes.length === 0) {
+        const poke = new TextEncoder().encode("poke 8\n");
+        port.write(poke);
+        continue;
+      }
+      if (adapter === "gblink") {
+        for (const byte of item.bytes) {
+          port.write(Uint8Array.of(byte));
+          const reply = port.read(1, 100);
+          if (reply.length !== 1) throw new Error("GBLink response timeout");
+          received++;
+          sent++;
+        }
+      } else {
+        port.write(adapterBytes(adapter, o.mode, item.bytes));
+        sent += item.bytes.length;
+      }
+    }
+    if (now - started >= o.durationMs && queue.length === 0) {
+      port.close();
+      console.log(`linksync: sent ${sent} bytes${adapter === "gblink" ? `, received ${received}` : ""}`);
+      exitCli(0);
+    }
+  }, 1);
+  console.log(`linksync: ${adapter} live output on ${o.serial} (${o.bpm} BPM, ${o.lookaheadMs ?? 0} ms lookahead)`);
+}
+
+// txiki supplies setInterval; wrapping it keeps Node's type environment out of the CLI bundle.
+function declareTimer(fn: () => void, ms: number): void {
+  (globalThis as unknown as { setInterval(cb: () => void, delay: number): unknown }).setInterval(fn, ms);
+}
+
+function makeRpcCall(): (method: string, ...params: unknown[]) => unknown {
+  type Send = (request: unknown) => { result?: unknown; error?: { code: number; message: string } } | undefined;
+  const ns = (globalThis as Record<symbol, unknown>)[Symbol.for("plugin")] as { __rpcSend?: Send } | undefined;
+  if (!ns?.__rpcSend) throw new Error("linksync: native serial RPC is unavailable");
+  let id = 1;
+  return (method, ...params) => {
+    const reply = ns.__rpcSend!({ jsonrpc: "2.0", id: id++, method, params });
+    if (reply?.error) throw new Error(`rpc ${method}: ${reply.error.message}`);
+    return reply?.result;
+  };
+}
+
+function exitCli(code: number): void {
+  (globalThis as unknown as { tjs: { exit(code: number): void } }).tjs.exit(code);
+}
+
 function runLinkSync(s: Session, args: string[]): void {
   const o = parseLinkSyncArgs(args);
+  if (o.live && !o.dryRun) { runLiveLinkSync(o); return; }
   const lines = generateSyncScript(o);
   const text = lines.join("\n") + (lines.length ? "\n" : "");
 
@@ -134,6 +242,7 @@ function runLinkSync(s: Session, args: string[]): void {
   } else {
     process.stdout ? process.stdout.write(text) : console.log(text);
   }
+  exitCli(0);
 }
 
 const LINKSYNC_HELP = `retroplug-cli linksync — generate an LSDj sync command stream for Chromatic hardware
@@ -148,6 +257,11 @@ usage: retroplug-cli linksync [options]
   --auto-start       tap Start on the transport rise (emits a 'poke' line)
   --sample-rate <hz> timeline sample rate (default 44100)
   --out <file>       write command lines to a file (else stdout)
+  --adapter <name>   chromatic | gblink (default chromatic)
+  --serial <port>    serial device for --live
+  --lookahead-ms <n> constant live-output delay (default 0)
+  --live              transmit in real time (never implied)
+  --dry-run           force deterministic text output even with --live
 
 Emits 'rpsync <mode> <byte...>' lines (and 'poke' for Start), the exact commands the
 Chromatic MCU firmware consumes. Send them to the device console, e.g.:
@@ -163,5 +277,6 @@ export const linksyncTool: CliTool = {
   name: "linksync",
   summary: "generate an LSDj sync command stream for Chromatic hardware",
   help: LINKSYNC_HELP,
+  longRunning: true,
   run: runLinkSync,
 };

@@ -31,4 +31,6 @@ export interface SerialClient {
   listPorts(): SerialPortInfo[];
   /** Open a port; throws if it can't be opened. */
   open(port: string): OpenSerialPort;
+  /** Open using explicit UART framing (hardware links such as GBLink use 19200/8N1). */
+  openConfigured(port: string, baudRate: number, dataBits?: number, parity?: "none" | "odd" | "even", stopBits?: number): OpenSerialPort;
 }

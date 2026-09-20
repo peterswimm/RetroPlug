@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { generateSyncScript, formatRpsync, parseLinkSyncArgs } from "./linksync.ts";
+import { adapterBytes, generateSyncScript, formatRpsync, parseLinkSyncArgs } from "./linksync.ts";
 import { LsdjSyncModeNum } from "./linksyncBridge.ts";
 
 test("formatRpsync builds the MCU console command line", () => {
@@ -36,10 +36,18 @@ test("generateSyncScript with --auto-start emits a leading poke (Start)", () => 
 });
 
 test("parseLinkSyncArgs parses flags and rejects unknowns", () => {
-  const o = parseLinkSyncArgs(["--bpm", "140", "--mode", "arduinoboy", "--duration", "2s", "--divisor", "2"]);
+  const o = parseLinkSyncArgs(["--bpm", "140", "--mode", "arduinoboy", "--duration", "2s", "--divisor", "2", "--adapter", "gblink", "--serial", "/dev/fake", "--live"]);
   assert.equal(o.bpm, 140);
   assert.equal(o.mode, LsdjSyncModeNum.MidiSyncArduinoboy);
   assert.equal(o.durationMs, 2000);
   assert.equal(o.divisor, 2);
+  assert.equal(o.adapter, "gblink");
+  assert.equal(o.serial, "/dev/fake");
+  assert.equal(o.live, true);
   assert.throws(() => parseLinkSyncArgs(["--nope"]));
+});
+
+test("adapter framing is raw for GBLink and textual for Chromatic", () => {
+  assert.deepEqual([...adapterBytes("gblink", 1, [0xf8, 0xfa])], [0xf8, 0xfa]);
+  assert.equal(new TextDecoder().decode(adapterBytes("chromatic", 1, [0xf8])), "rpsync 1 f8\n");
 });

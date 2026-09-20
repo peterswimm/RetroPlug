@@ -34,6 +34,10 @@ public:
     // or -1 if the port can't be opened (absent / busy / permission).
     std::int32_t serialOpen(std::string port);
 
+    // Open with explicit framing. Kept separate so existing N8 callers retain their stable one-argument RPC.
+    std::int32_t serialOpenConfigured(std::string port, std::uint32_t baudRate, std::uint8_t dataBits,
+                                      std::string parity, std::uint8_t stopBits);
+
     // Write raw bytes to an open handle. Returns the number written, or -1 for an unknown handle.
     std::int32_t serialWrite(std::int32_t handle, rfl::Bytestring data);
 
@@ -61,6 +65,7 @@ template <class Server>
 void registerSerialRpc(Server& s, SerialRpcService& svc) {
     s.template addMethod<&SerialRpcService::serialListPorts>(svc);
     s.template addMethod<&SerialRpcService::serialOpen>(svc);
+    s.template addMethod<&SerialRpcService::serialOpenConfigured>(svc);
     s.template addMethod<&SerialRpcService::serialWrite>(svc);
     s.template addMethod<&SerialRpcService::serialRead>(svc);
     s.template addMethod<&SerialRpcService::serialFlush>(svc);
