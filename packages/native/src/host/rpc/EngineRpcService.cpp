@@ -8,7 +8,9 @@
 
 #include "host/engine/Engine.hpp"
 #include "host/engine/EngineInvoker.hpp"
+#ifndef RETROPLUG_SAMEBOY_ONLY
 #include "system/mesen/MesenBackend.hpp"
+#endif
 #include "system/sameboy/SameBoyBackend.hpp"
 #include "host/dsp/ScriptCompiler.hpp"
 #include "system/SystemFactory.hpp"
@@ -139,6 +141,7 @@ bool EngineRpcService::applyRoleConfig(std::uint32_t id, std::string kind, std::
         invoker_.applyConfigField(id, static_cast<std::uint8_t>(ConfigField::LightTemperature), c.lightTemperature);
         return true;
     }
+    #ifndef RETROPLUG_SAMEBOY_ONLY
     if (kind == "mesen") {
         // Attaches to any Mesen system; a GBA system casts to null in Engine::applyConfigField → no-op.
         const MesenNesRoleConfig c = MesenBackend::decodeMesenNesRoleConfig(config);
@@ -149,6 +152,7 @@ bool EngineRpcService::applyRoleConfig(std::uint32_t id, std::string kind, std::
         invoker_.applyConfigField(id, static_cast<std::uint8_t>(ConfigField::NesMmc5PhaseReset), static_cast<double>(c.mmc5PhaseReset));
         return true;
     }
+    #endif
     return false;
 }
 

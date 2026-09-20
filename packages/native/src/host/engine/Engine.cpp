@@ -9,7 +9,9 @@
 #include "system/SystemTypes.hpp"   // AudioBlockInfo, SystemId
 #include "system/BlockRunner.hpp"   // runBlock + MultiOutRouter
 #include "system/sameboy/SameBoySystem.hpp"  // live-apply cast target (model/highpass/gain/…)
+#ifndef RETROPLUG_SAMEBOY_ONLY
 #include "system/mesen/MesenNesSystem.hpp"    // live-apply cast target (NES region / sprite limit)
+#endif
 
 #include "transport/FrameBufferTriple.hpp"
 #include "native/core/img/png/lodepng.h"
@@ -98,8 +100,10 @@ void Engine::syncSplitPlan() {
     // second system added, ROM replaced) starts from the core's own construct-time state. A system that
     // has since gone is simply not found and the record is dropped.
     if (armedTap_.active) {
+#ifndef RETROPLUG_SAMEBOY_ONLY
         if (auto* prev = dynamic_cast<MesenNesSystem*>(project_.findSystem(armedTap_.id)))
             prev->setChannelExportMode(armedTap_.prevMode);
+#endif
         armedTap_ = {};
     }
 
@@ -112,6 +116,9 @@ void Engine::syncSplitPlan() {
 
     // Pins are a 2A03 property — nothing else has output pins to split. A GB (or any other console)
     // asked for them falls back to Stereo rather than silently rendering something else.
+    #ifdef RETROPLUG_SAMEBOY_ONLY
+    if (pins) return;
+    #else
     auto* nes = dynamic_cast<MesenNesSystem*>(sys);
     if (pins && !nes) return;
 
@@ -126,6 +133,7 @@ void Engine::syncSplitPlan() {
             nes->setChannelExportMode(want);
         }
     }
+    #endif
 
     // Read the layout ONCE, now that the tap reflects the mode (channelLayout() follows it). A layout is
     // all-stereo (GB) or all-mono (NES); a mixed one has no sensible packing, so treat it as stereo and
@@ -401,6 +409,7 @@ void Engine::applyConfigField(SystemId id, std::uint8_t field, double value) {
 
     // The remaining fields are backend-specific emulator knobs, dispatched by concrete type (a system
     // is exactly one, so the order of the casts below doesn't matter). Mesen (NES) first.
+    #ifndef RETROPLUG_SAMEBOY_ONLY
     if (auto* mn = dynamic_cast<MesenNesSystem*>(sys)) {
         switch (static_cast<ConfigField>(field)) {
             case ConfigField::NesRegion:
@@ -423,6 +432,7 @@ void Engine::applyConfigField(SystemId id, std::uint8_t field, double value) {
         }
         return;
     }
+    #endif
 
     // SameBoy emulator knobs (model / highpass / link group / fast boot).
     auto* sb = dynamic_cast<SameBoySystem*>(sys);

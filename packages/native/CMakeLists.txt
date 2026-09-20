@@ -110,6 +110,14 @@ endif()
 # retroplug-backend: the Backend as a static library — everything except a host
 # entry point, so both the test host (retroplug-host) and the DPF plugin compose the SAME
 # Engine/Backend/DspRuntime. Includes + links are PUBLIC so consumers inherit them.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(_rp_host_runtime_source "")
+    set(_rp_host_runtime_library qjs)
+else()
+    set(_rp_host_runtime_source ${DPFJS_PATH}/src/dpfjs/host/TjsHostRuntime.cpp)
+    set(_rp_host_runtime_library tjs)
+endif()
+
 add_library(retroplug-backend STATIC
     src/host/rpc/HostRpcService.cpp         # fs / config / zip (+ opt-in efsw file watcher)
     src/host/rpc/NativeFileWatcher.cpp      # efsw watcher behind drainChangedPaths / setWatchedRoms
@@ -128,7 +136,7 @@ add_library(retroplug-backend STATIC
     src/host/render/RenderHost.cpp          # bare-QuickJS render host (own Engine, runs the worker bundle)
     src/host/render/RenderJobRegistry.cpp   # background render jobs — one worker thread each, cancellable
     ${RENDER_WORKER_BUNDLE_C}               # embedded render-worker bytecode (rp_render_worker_bundle)
-    ${DPFJS_PATH}/src/dpfjs/host/TjsHostRuntime.cpp  # shared txiki host (dpf.js)
+    ${_rp_host_runtime_source}  # desktop txiki host; Apple uses AppleQuickJsHost in its framework
 )
 add_dependencies(retroplug-backend retroplug-render-worker-bundle)  # the embedded worker bytecode must exist first
 
@@ -147,7 +155,7 @@ find_package(Threads REQUIRED)  # efsw-static needs pthreads on Linux (its CMake
 
 target_link_libraries(retroplug-backend PUBLIC
     retroplug-core      # Project + SystemBase + SameBoy/Mesen; PUBLIC-brings rpcpp + miniz
-    tjs                 # txiki.js/QuickJS runtime (transitively brings qjs + libuv)
+    ${_rp_host_runtime_library} # txiki on desktop; bare QuickJS for the app-extension-safe Apple host
     efsw-static         # NativeFileWatcher's filesystem watcher (PUBLIC-brings efsw/efsw.hpp include dir)
     Threads::Threads
 )
@@ -376,6 +384,80 @@ add_custom_target(retroplug-cp-bundle ALL
 # path (not a target) — the custom command's DEPENDS already tracks it.
 if(TARGET ${_TJSC_DEP})
   add_dependencies(retroplug-cp-bundle ${_TJSC_DEP})
+endif()
+
+# Apple host contract smoke. The production iOS framework compiles AppleEngineHost with a SameBoy-only
+# dependency closure; this headless target links the desktop backend to exercise the identical Engine /
+# QueuedInvoker / RPC / control-plane ownership graph without requiring signing or a simulator.
+add_executable(retroplug-apple-host-test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit/AppleEngineHost.cpp
+    ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit/AppleQuickJsHost.cpp
+    test/apple/AppleEngineHost.test.cpp
+    ${CP_BUNDLE_C})
+add_dependencies(retroplug-apple-host-test retroplug-cp-bundle)
+target_include_directories(retroplug-apple-host-test PRIVATE ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit)
+target_link_libraries(retroplug-apple-host-test PRIVATE retroplug-backend)
+set_target_properties(retroplug-apple-host-test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
+# Native framework consumed by the Xcode app and extension. AppleEngineHost registers only SameBoy;
+# archive auditing below is the release gate that proves no Mesen/GPL object was pulled from the
+# desktop libraries. Cross builds reuse a host tjsc, so the control plane is bytecode embedded here.
+if(APPLE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # SameBoy-only dependency closure for the shipping binary. This intentionally does not link the
+    # desktop retroplug-core target (which includes Mesen) or txiki (whose process/socket modules are not
+    # app-extension safe). The source list mirrors the shared engine facets AppleEngineHost actually uses.
+    add_library(retroplug-apple-core STATIC
+        src/project/Project.cpp
+        src/kit/SampleCache.cpp src/kit/KitCompiler.cpp
+        src/lsdj/Effects.cpp src/lsdj/KitUtil.cpp src/lsdj/LsdjKitCodec.cpp
+        src/risa/RisaDmcCodec.cpp src/util/ProcessId.cpp
+        src/system/SystemBase.cpp src/system/BlockRunner.cpp src/system/OfflineRender.cpp
+        src/system/sameboy/LinkGroup.cpp src/system/sameboy/SameBoySystem.cpp
+        ${DPFJS_PATH}/deps/lv_binding_js/src/render/native/core/img/png/lodepng.cpp)
+    target_include_directories(retroplug-apple-core PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${DPFJS_PATH}/deps/lv_binding_js/src/render
+        ${DPFJS_PATH}/deps/lv_binding_js/deps/txiki/deps/miniz)
+    target_link_libraries(retroplug-apple-core PUBLIC
+        sameboy rpcpp r8brain enkiTS miniaudio miniz mgb-rom)
+    set_target_properties(retroplug-apple-core PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
+    add_library(retroplug-apple-backend STATIC
+        src/host/rpc/HostRpcService.cpp src/host/rpc/NativeFileWatcher.cpp
+        src/host/rpc/EngineRpcService.cpp
+        src/host/engine/Engine.cpp src/host/engine/SnapshotRegistry.cpp src/host/engine/EngineInvoker.cpp
+        src/system/SystemFactory.cpp src/system/sameboy/SameBoyBackend.cpp
+        src/host/dsp/ScriptCompiler.cpp src/host/dsp/DspRuntime.cpp)
+    target_include_directories(retroplug-apple-backend PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${DPFJS_PATH}/deps/lv_binding_js/deps/txiki/deps/quickjs)
+    target_link_libraries(retroplug-apple-backend PUBLIC retroplug-apple-core qjs efsw-static Threads::Threads)
+    target_compile_definitions(retroplug-apple-backend PRIVATE RETROPLUG_SAMEBOY_ONLY=1)
+    set_target_properties(retroplug-apple-backend PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    set(_rp_apple_backend retroplug-apple-backend)
+  else()
+    set(_rp_apple_backend retroplug-backend)
+  endif()
+  add_library(RetroPlugNative SHARED EXCLUDE_FROM_ALL
+      ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit/AppleEngineHost.cpp
+      ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit/AppleQuickJsHost.cpp
+      ${CP_BUNDLE_C})
+  add_dependencies(RetroPlugNative retroplug-cp-bundle)
+  target_include_directories(RetroPlugNative PUBLIC ${CMAKE_SOURCE_DIR}/ios/RetroPlugKit)
+  target_link_libraries(RetroPlugNative PRIVATE ${_rp_apple_backend})
+  set_target_properties(RetroPlugNative PROPERTIES
+      CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON
+      FRAMEWORK TRUE
+      FRAMEWORK_VERSION A
+      PUBLIC_HEADER "${CMAKE_SOURCE_DIR}/ios/RetroPlugKit/AppleEngineHost.hpp"
+      OUTPUT_NAME RetroPlugNative)
+endif()
+
+# The iOS cross build produces only RetroPlugNative. Desktop shells, DPF formats, UI harnesses and
+# their OpenGL/SDL/PortAudio dependencies are neither useful nor available in the iOS SDK.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  return()
 endif()
 
 # The UI bundle: main.tsx → bytecode C array (React entry via build-ui.js). Derived; never
