@@ -1,0 +1,173 @@
+# XcodeGen project for the Engine-backed iOS player and AUv3. Run
+# ./generate.sh first; it embeds the control-plane bytecode in RetroPlugNative.
+#
+# Layout:
+#   RetroPlugKit  — AU implementation + Apple lifecycle bridge over RetroPlugNative.
+#                   Shared by the app (in-process) and the extension.
+#   RetroPlugAU   — the AUv3 app extension ('aumu' / 'mgbs' / 'RPtm').
+#   RetroPlug     — SwiftUI container app + standalone MIDI-pad proof.
+name: RetroPlugIOS
+options:
+  bundleIdPrefix: org.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+    GCC_C_LANGUAGE_STANDARD: gnu11
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  RetroPlugKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: RetroPlugKit
+        excludes:
+          - RetroPlugAudioUnit.mm
+          - AppleEngineHost.cpp
+          - AppleQuickJsHost.cpp
+      # Only RetroPlugKit/ headers are framework API. Everything below is
+      # implementation detail — mark headers `project` so they stay out of
+      # the module map (the module verifier otherwise demands the umbrella
+      # header include every vendored SameBoy/boot-ROM header).
+      - path: generated
+        name: generated
+        headerVisibility: project
+    dependencies:
+      - framework: .build/RetroPlugNative.xcframework
+      - sdk: AudioToolbox.framework
+      - sdk: AVFAudio.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(RETROPLUG_BUNDLE_PREFIX).retroplug.kit"
+        RETROPLUG_BUNDLE_PREFIX: org.example
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/RetroPlugKit"
+
+  RetroPlugAU:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: RetroPlugAU
+      - path: Shared
+    dependencies:
+      - target: RetroPlugKit
+        embed: false        # the parent app embeds the framework; the appex reaches it via rpath
+    info:
+      path: RetroPlugAU/Info.plist
+      properties:
+        CFBundleDisplayName: RetroPlug mGB
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.AudioUnit-UI
+          NSExtensionPrincipalClass: RetroPlugAU.AudioUnitViewController
+          NSExtensionAttributes:
+            AudioComponents:
+              - name: "tommitytom: RetroPlug mGB"
+                description: "RetroPlug mGB synthesizer"
+                manufacturer: RPtm
+                subtype: mgbs
+                type: aumu
+                version: 1
+                sandboxSafe: true
+                tags: [Synth]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(RETROPLUG_BUNDLE_PREFIX).retroplug.auv3"
+        RETROPLUG_BUNDLE_PREFIX: org.example
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../../Frameworks"
+
+  RetroPlug:
+    type: application
+    platform: iOS
+    sources:
+      - path: RetroPlugApp
+      - path: Shared
+    dependencies:
+      - target: RetroPlugKit
+        embed: true
+      - target: RetroPlugAU
+        embed: true
+    info:
+      path: RetroPlugApp/Info.plist
+      properties:
+        CFBundleDisplayName: RetroPlug
+        UILaunchScreen: {}
+        # Keep the synth audible when the app is backgrounded (the session is
+        # already .playback; the engine keeps rendering).
+        UIBackgroundModes: [audio]
+        # No networking, no crypto beyond the OS — skips the export-compliance
+        # questionnaire on every upload.
+        ITSAppUsesNonExemptEncryption: false
+        # All four orientations: with iPad multitasking (no UIRequiresFullScreen),
+        # anything less trips "All interface orientations must be supported".
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Files-app access to Documents/ — dropping a ROM next to its .sav in
+        # Documents/roms is the only sandbox-legal way sibling-pairing works
+        # (a fileImporter security scope never covers directory siblings).
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # Physical game controllers (App Store metadata; the GameController
+        # framework works without it).
+        GCSupportsControllerUserInteraction: true
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.toilville.retroplug.gb
+            UTTypeDescription: Game Boy ROM
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [gb]
+          - UTTypeIdentifier: com.toilville.retroplug.gbc
+            UTTypeDescription: Game Boy Color ROM
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [gbc]
+          - UTTypeIdentifier: com.toilville.retroplug.sav
+            UTTypeDescription: Game Boy Save (battery RAM)
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [sav]
+          - UTTypeIdentifier: com.toilville.retroplug.rplg
+            UTTypeDescription: RetroPlug Project
+            UTTypeConformsTo: [public.json]
+            UTTypeTagSpecification:
+              public.filename-extension: [rplg]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(RETROPLUG_BUNDLE_PREFIX).retroplug"
+        RETROPLUG_BUNDLE_PREFIX: org.example
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  RetroPlugTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: RetroPlugKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(RETROPLUG_BUNDLE_PREFIX).retroplug.tests"
+        RETROPLUG_BUNDLE_PREFIX: org.example
+
+schemes:
+  RetroPlug:
+    build:
+      targets:
+        RetroPlug: all
+    run:
+      config: Debug
+    test:
+      targets:
+        - RetroPlugTests
