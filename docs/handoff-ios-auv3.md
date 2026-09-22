@@ -1,7 +1,8 @@
 # iOS/AUv3 handoff for Tommy
 
-Branch: `codex/ios-auv3-engine`, based on `upstream/main` at `2d602f38`.
-Nothing from this branch has been pushed, signed, submitted, or published.
+Branch: `codex/ios-auv3-engine`, based on `upstream/main` at `2d602f38` and
+published to Peter's fork for review/cherry-picking. Nothing has been signed,
+submitted to an app store, or released.
 
 ## Purpose and architecture
 
@@ -26,19 +27,25 @@ pnpm install
 ./ios/build-native.sh
 xcodegen generate --spec ios/project.yml --project ios
 xcodebuild -project ios/RetroPlugIOS.xcodeproj -scheme RetroPlug \
-  -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+  -destination 'generic/platform=iOS Simulator' -configuration Debug \
+  CODE_SIGNING_ALLOWED=NO build
 cmake --build build --target retroplug-apple-host-test -j8
 ./build/native/retroplug-apple-host-test
 pnpm test
 ```
 
-Verified on 2026-09-20:
+Verified on 2026-09-20, with the Xcode runtime checks repeated on 2026-09-22:
 
 - `retroplug-apple-host-test`: exit 0, including control-plane startup, mGB
   project round-trip, lifecycle suspend/resume, and real per-channel audio.
 - `ios/build-native.sh`: exit 0 for arm64 device and simulator slices.
-- unsigned arm64 simulator `xcodebuild`: `BUILD SUCCEEDED` for the app and AUv3.
-- XCTest lifecycle/state/bus target: `TEST BUILD SUCCEEDED` for arm64 simulator.
+- unsigned arm64 Release `xcodebuild`: exit 0 for both generic iOS device and
+  simulator builds, including the container app and embedded AUv3.
+- XCTest lifecycle/state/bus test: executed and passed on an iPhone 17 / iOS
+  27.0 arm64 simulator (not merely compiled).
+- bare QuickJS startup now supplies the guarded UTF-8 Web globals required by
+  the canonical control plane and reports rejected module promises with their
+  JavaScript stack instead of a generic readiness failure.
 - TypeScript suite: 145 test files passed.
 - Native suite: 117 test files passed (ROM-dependent cases skipped when the
   external ROM corpus was unavailable).

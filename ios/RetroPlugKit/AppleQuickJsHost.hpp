@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -20,6 +21,7 @@ public:
     ~AppleQuickJsHost();
     bool init();
     JSContext* context() const { return context_; }
+    const std::string& lastError() const { return lastError_; }
     int evalModuleBytecode(const std::uint8_t* bytes, std::size_t size);
     void pump();
     void bindRpcSend(JSValue object, RpcSendFn callback);
@@ -28,5 +30,6 @@ private:
     static JSValue rpcThunk(JSContext*, JSValueConst, int, JSValueConst*, int, JSValue*);
     JSRuntime* runtime_ = nullptr;
     JSContext* context_ = nullptr;
+    std::string lastError_;
     std::vector<std::unique_ptr<RpcSendFn>> bindings_;
 };

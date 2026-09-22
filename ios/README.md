@@ -22,7 +22,8 @@ pnpm install
 ./ios/build-native.sh
 xcodegen generate --spec ios/project.yml --project ios
 xcodebuild -project ios/RetroPlugIOS.xcodeproj -scheme RetroPlug \
-  -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+  -destination 'generic/platform=iOS Simulator' -configuration Debug \
+  CODE_SIGNING_ALLOWED=NO build
 ```
 
 `build-native.sh` builds device and simulator slices and writes

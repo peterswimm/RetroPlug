@@ -20,6 +20,10 @@ settings:
     GCC_C_LANGUAGE_STANDARD: gnu11
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     CODE_SIGN_STYLE: Automatic
+    # build-native.sh emits an arm64 simulator slice. Keep Xcode's requested
+    # architecture aligned so a plain simulator build does not ask the
+    # XCFramework for an unavailable x86_64 library.
+    "ARCHS[sdk=iphonesimulator*]": arm64
 
 targets:
   RetroPlugKit:
@@ -31,6 +35,12 @@ targets:
           - RetroPlugAudioUnit.mm
           - AppleEngineHost.cpp
           - AppleQuickJsHost.cpp
+          - AppleEngineHost.hpp
+          - AppleQuickJsHost.hpp
+      - path: RetroPlugKit/AppleEngineHost.hpp
+        headerVisibility: project
+      - path: RetroPlugKit/AppleQuickJsHost.hpp
+        headerVisibility: project
       # Only RetroPlugKit/ headers are framework API. Everything below is
       # implementation detail — mark headers `project` so they stay out of
       # the module map (the module verifier otherwise demands the umbrella

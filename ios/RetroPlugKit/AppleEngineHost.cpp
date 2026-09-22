@@ -34,6 +34,7 @@ struct AppleEngineHost::Impl {
     std::unique_ptr<rpcpp::QuickJSTransport> transport;
     std::unique_ptr<AppleRpcServer> server;
     bool isReady = false;
+    std::string startupError;
     bool running = false;
     bool noteOutEnabled = false;
     std::array<std::uint8_t, 4> noteChannels{0, 1, 2, 3};
@@ -78,9 +79,14 @@ struct AppleEngineHost::Impl {
         JS_FreeValue(ctx, sym);
         JS_FreeValue(ctx, global);
 
-        if (host.evalModuleBytecode(rp_cp_bundle, rp_cp_bundle_size) != 0) return false;
+        if (host.evalModuleBytecode(rp_cp_bundle, rp_cp_bundle_size) != 0) {
+            startupError = host.lastError();
+            return false;
+        }
         for (int i = 0; i < 1000 && !globalBool("__rp_ready"); ++i) host.pump();
-        return isReady = globalBool("__rp_ready");
+        isReady = globalBool("__rp_ready");
+        if (!isReady) startupError = "Control plane did not report ready";
+        return isReady;
     }
 
     JSValue call(const char* name, std::vector<JSValue> args = {}) {
@@ -265,6 +271,7 @@ AppleEngineHost::AppleEngineHost(double sampleRate) : impl_(std::make_unique<Imp
 }
 AppleEngineHost::~AppleEngineHost() { suspend(); }
 bool AppleEngineHost::ready() const { return impl_->isReady; }
+const std::string& AppleEngineHost::startupError() const { return impl_->startupError; }
 void AppleEngineHost::setSampleRate(double sampleRate) { if (!impl_->running) impl_->engine.setSampleRate(sampleRate); }
 void AppleEngineHost::resume() { impl_->invoker.setAudioThreadOwns(true); impl_->running = true; }
 void AppleEngineHost::suspend() {

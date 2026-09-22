@@ -23,6 +23,7 @@ public:
     AppleEngineHost& operator=(const AppleEngineHost&) = delete;
 
     bool ready() const;
+    const std::string& startupError() const;
     void setSampleRate(double sampleRate);
     void resume();
     void suspend();

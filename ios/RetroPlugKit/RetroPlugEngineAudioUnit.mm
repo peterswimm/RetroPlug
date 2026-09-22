@@ -70,7 +70,15 @@ void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
     if (!self) return nil;
     _state = std::make_unique<RenderState>();
     _state->host = std::make_unique<AppleEngineHost>(44100.0);
-    if (!_state->host->ready()) { if (error) *error = RPError(RPCoreBridgeErrorNoSystem, @"Control plane failed to start."); return nil; }
+    if (!_state->host->ready()) {
+        if (error) {
+            const std::string& detail = _state->host->startupError();
+            NSString* message = detail.empty() ? @"Control plane failed to start."
+                                               : [NSString stringWithUTF8String:detail.c_str()];
+            *error = RPError(RPCoreBridgeErrorNoSystem, message);
+        }
+        return nil;
+    }
 
     AVAudioFormat* format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
     NSArray* names = @[@"Mix", @"Pulse 1", @"Pulse 2", @"Wave", @"Noise"];
