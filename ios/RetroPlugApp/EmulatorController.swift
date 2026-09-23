@@ -68,6 +68,7 @@ final class EmulatorController: ObservableObject {
                 return
             }
             auUnit = au
+            SharedProjectStore.restore(into: au)
             // Push persisted settings into the freshly built unit.
             au.setGainDb(Float(settings.gainDb))
             au.setFastBoot(settings.fastBoot)
@@ -115,24 +116,8 @@ final class EmulatorController: ObservableObject {
     func load(_ entry: RomEntry) {
         guard let au = auUnit else { return }
         saveSramNow()
-        // A .rplg sidecar (thin desktop project) carries per-system settings;
-        // apply them before the load so the ROM boots on the right model.
-        let project = library.project(for: entry)
-        if let config = project?.sameboyConfig {
-            if let model = config.sameboyModel, model != settings.model {
-                apply(model: model)
-            }
-            if let fastBoot = config.fastBoot, fastBoot != settings.fastBoot {
-                apply(fastBoot: fastBoot)
-            }
-        }
-        // The lsdj-sync role carries the MIDI translation the project expects
-        // (e.g. LSDj slaved to the host clock via midiSync).
-        if let config = project?.lsdjSyncConfig {
-            if let mode = config.midiSyncMode { apply(syncMode: mode) }
-            if let divisor = config.tempoDivisor { apply(syncTempoDivisor: divisor) }
-            if let autoStart = config.autoStart { apply(syncAutoStart: autoStart) }
-        }
+        // Project schemas and role migrations are intentionally not decoded in Swift. The AU bridge
+        // imports this ROM through SystemsStore, the canonical TypeScript control plane.
         do {
             let rom = try library.romData(entry)
             try au.loadRomData(rom, sram: library.sram(for: entry), state: nil)
@@ -160,6 +145,7 @@ final class EmulatorController: ObservableObject {
         case .mgb:            library.writeMgbSram(au.saveSram())
         case .rom(let entry): library.writeSram(au.saveSram(), for: entry)
         }
+        SharedProjectStore.save(from: au)
     }
 
     private var stateKey: String? {

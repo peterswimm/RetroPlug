@@ -288,18 +288,23 @@ retroplug_silence_dep_warnings(efsw-static efsw)
 # generated-source wiring). PluginRpcService::loadMgb builds a system from it,
 # and Project::addSystem re-supplies it for saved projects (see EmbeddedRoms.hpp).
 # Fixed, git-tracked asset → a timestamp-tracked rule (regen only when it changes).
-set(MGB_ROM_C "${CMAKE_BINARY_DIR}/generated/roms/mgb_rom_data.c")
-add_custom_command(
-    OUTPUT  "${MGB_ROM_C}"
-    COMMAND ${CMAKE_COMMAND}
-            -DINPUT=${CMAKE_SOURCE_DIR}/resources/roms/mGB.gb
-            -DSYMBOL=mgb_rom
-            -DOUTPUT=${MGB_ROM_C}
-            -P ${CMAKE_SOURCE_DIR}/cmake/bin2c.cmake
-    DEPENDS "${CMAKE_SOURCE_DIR}/resources/roms/mGB.gb"
-            "${CMAKE_SOURCE_DIR}/cmake/bin2c.cmake"
-    COMMENT "bin2c mgb_rom_data.c"
-    VERBATIM)
+option(RETROPLUG_EMBED_MGB "Embed the third-party mGB ROM (desktop/development builds only)" ON)
+if(RETROPLUG_EMBED_MGB)
+    set(MGB_ROM_C "${CMAKE_BINARY_DIR}/generated/roms/mgb_rom_data.c")
+    add_custom_command(
+        OUTPUT  "${MGB_ROM_C}"
+        COMMAND ${CMAKE_COMMAND}
+                -DINPUT=${CMAKE_SOURCE_DIR}/resources/roms/mGB.gb
+                -DSYMBOL=mgb_rom
+                -DOUTPUT=${MGB_ROM_C}
+                -P ${CMAKE_SOURCE_DIR}/cmake/bin2c.cmake
+        DEPENDS "${CMAKE_SOURCE_DIR}/resources/roms/mGB.gb"
+                "${CMAKE_SOURCE_DIR}/cmake/bin2c.cmake"
+        COMMENT "bin2c mgb_rom_data.c"
+        VERBATIM)
+else()
+    set(MGB_ROM_C "${CMAKE_SOURCE_DIR}/cmake/empty_mgb_rom.c")
+endif()
 add_library(mgb-rom STATIC "${MGB_ROM_C}")
 set_target_properties(mgb-rom PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -341,4 +346,3 @@ endif()
 
 # The dpf.js seam probe (examples/minimal) now lives in the dpf.js repo and is
 # built there with -DDPFJS_BUILD_EXAMPLE=ON.
-

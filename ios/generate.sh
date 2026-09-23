@@ -9,7 +9,7 @@ set -euo pipefail
 #   - applies the SameBoy per-channel audio patch (idempotent; SameBoySystem.cpp
 #     calls GB_apu_set_channel_sample_callback from it)
 #   - assembles the SameBoy boot ROMs via RGBDS -> generated/system/sameboy/bootroms/*.h
-#   - embeds the mGB ROM -> generated/roms/mgb_rom_data.c (extern mgb_rom / mgb_rom_len)
+#   - optionally embeds mGB for a local development build (never by default)
 #   - emits generated/sameboy_version.h (#define GB_VERSION "...")
 #   - clones reflect-cpp (header-only; SameBoyConfig.hpp needs rfl/Literal.hpp)
 #
@@ -84,12 +84,19 @@ for name in dmg_boot mgb_boot cgb_boot cgb0_boot cgb_boot_fast agb_boot sgb_boot
 done
 
 # --- embedded mGB ROM (EmbeddedRoms.hpp expects extern mgb_rom / mgb_rom_len)
-bin2c "$REPO/resources/roms/mGB.gb" mgb_rom "$GEN/roms/mgb_rom_data.c"
-echo "rom: mgb_rom_data.c"
+if [ "${RETROPLUG_EMBED_MGB:-0}" = "1" ]; then
+    bin2c "$REPO/resources/roms/mGB.gb" mgb_rom "$GEN/roms/mgb_rom_data.c"
+    echo "rom: embedded development-only mGB"
+else
+    bin2c /dev/null mgb_rom "$GEN/roms/mgb_rom_data.c"
+    echo "rom: distribution-safe empty mGB marker"
+fi
 
 # --- GB_VERSION (force-included via OTHER_CFLAGS in project.yml)
 VER="$(sed -n 's/^VERSION[[:space:]]*:=[[:space:]]*//p' "$SB/version.mk" | tr -d '[:space:]')"
 printf '#ifndef GB_VERSION\n#define GB_VERSION "%s"\n#endif\n' "$VER" > "$GEN/sameboy_version.h"
 echo "version: GB_VERSION=\"$VER\""
 
-echo "done — now run: xcodegen (in ios/), then open RetroPlugIOS.xcodeproj"
+"$PWD/build-native.sh"
+xcodegen generate --spec "$PWD/project.yml"
+echo "done — set RETROPLUG_BUNDLE_PREFIX and signing in Xcode; identifiers are intentionally left to the publisher"

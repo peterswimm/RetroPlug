@@ -7,79 +7,6 @@
 import Foundation
 import RetroPlugKit
 
-// A thin desktop `.rplg` project sidecar — raw JSON only (the `.rplg.zip`
-// export variant is not supported here). Decoding is forward-tolerant like the
-// desktop's role-config path: unknown keys are ignored, and only the first
-// system's SameBoy role is read — enough to carry model + fast-boot across.
-struct RplgProject: Decodable {
-    struct System: Decodable {
-        let romPath: String?
-        let roles: [Role]?
-    }
-    struct Role: Decodable {
-        let kind: String?
-        let config: Config?
-    }
-    // One forward-tolerant bag for every role we read — the sameboy role uses
-    // model/fastBoot, the lsdj-sync role uses mode/tempoDivisor/autoStart.
-    struct Config: Decodable {
-        let model: String?
-        let fastBoot: Bool?
-        let mode: String?
-        let tempoDivisor: Int?
-        let autoStart: Bool?
-
-        // Desktop MODEL_VALUES strings (settingsEnums.ts) → the bridge enum.
-        var sameboyModel: RPSameBoyModel? {
-            switch model {
-            case "auto":   return .auto
-            case "dmgB":   return .dmgB
-            case "mgb":    return .mgb
-            case "sgb":    return .sgb
-            case "sgbPal": return .sgbPal
-            case "sgb2":   return .sgb2
-            case "cgb0":   return .cgb0
-            case "cgbA":   return .cgbA
-            case "cgbB":   return .cgbB
-            case "cgbC":   return .cgbC
-            case "cgbD":   return .cgbD
-            case "cgbE":   return .cgbE
-            case "agb":    return .agb
-            case "gbp":    return .gbp
-            default:       return nil
-            }
-        }
-
-        // Desktop LSDJ_MODE_VALUES strings (settingsEnums.ts) → the bridge
-        // enum. "keyboard" maps to nil (it needs a host key feed — a later
-        // phase on desktop too), keeping the current mode rather than
-        // half-applying.
-        var midiSyncMode: RPMidiSyncMode? {
-            switch mode {
-            case "off":                return .off
-            case "midiPassthrough":    return .mgb
-            case "midiSync":           return .midiSync
-            case "midiSyncArduinoboy": return .midiSyncArduinoboy
-            case "midiMap":            return .midiMap
-            case "keyboardMidi":       return .keyboardMidi
-            case "midiOut":            return .midiOut
-            case "masterSync":         return .masterSync
-            default:                   return nil
-            }
-        }
-    }
-    let schemaVersion: String?
-    let systems: [System]?
-
-    var sameboyConfig: Config? {
-        systems?.first?.roles?.first { $0.kind == "sameboy" }?.config
-    }
-
-    var lsdjSyncConfig: Config? {
-        systems?.first?.roles?.first { $0.kind == "lsdj-sync" }?.config
-    }
-}
-
 struct RomEntry: Identifiable, Equatable, Hashable {
     let fileName: String
     var id: String { fileName }
@@ -158,31 +85,6 @@ final class RomLibrary: ObservableObject {
 
     func romData(_ entry: RomEntry) throws -> Data {
         try Data(contentsOf: romsDir.appendingPathComponent(entry.fileName))
-    }
-
-    // -- Desktop project sidecars (.rplg) --------------------------------------
-    // Prefers the desktop's sibling convention (<rom>.rplg); falls back to any
-    // .rplg in roms/ whose romPath names this ROM. Projects stamped with a
-    // schema newer than we understand are ignored rather than half-applied.
-
-    func project(for entry: RomEntry) -> RplgProject? {
-        if let project = decodeProject(at: romsDir.appendingPathComponent(entry.displayName + ".rplg")) {
-            return project
-        }
-        let names = (try? fm.contentsOfDirectory(atPath: romsDir.path)) ?? []
-        for name in names where (name as NSString).pathExtension.lowercased() == "rplg" {
-            guard let project = decodeProject(at: romsDir.appendingPathComponent(name)) else { continue }
-            let romPath = project.systems?.first?.romPath ?? ""
-            if (romPath as NSString).lastPathComponent == entry.fileName { return project }
-        }
-        return nil
-    }
-
-    private func decodeProject(at url: URL) -> RplgProject? {
-        guard let data = try? Data(contentsOf: url),
-              let project = try? JSONDecoder().decode(RplgProject.self, from: data) else { return nil }
-        if let version = project.schemaVersion.flatMap(Int.init), version > 3 { return nil }
-        return project
     }
 
     // -- Battery RAM ---------------------------------------------------------

@@ -31,6 +31,9 @@ test("the control-plane bundle composes, loads the kernel, and exposes the __rp_
   expect(typeof g.__rp_loadProjectPath).toBe("function");
   expect(typeof g.__rp_loadProjectB64).toBe("function");
   expect(typeof g.__rp_saveProjectB64).toBe("function");
+  expect(typeof g.__rp_appleLoadRom).toBe("function");
+  expect(typeof g.__rp_applePrimarySystemId).toBe("function");
+  expect(typeof g.__rp_appleSetRoleConfig).toBe("function");
 });
 
 test("autoload an mGB .rplg.zip → the kernel plays it; base64 getState/setState round-trips", () => {
@@ -65,4 +68,5 @@ test("autoload an mGB .rplg.zip → the kernel plays it; base64 getState/setStat
   expect(chunk.length > 0).toBeTruthy();
   expect(loadB64("")).toBeTruthy(); // reset to empty
   expect(loadB64(chunk)).toBeTruthy(); // restore from the chunk
+  expect((g.__rp_applePrimarySystemId as () => number)() > 0).toBeTruthy();
 });

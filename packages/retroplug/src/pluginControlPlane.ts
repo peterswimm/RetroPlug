@@ -7,6 +7,10 @@
 //   __rp_loadProjectB64(b64)    — DPF setState: load an in-memory chunk (base64 of the .rplg zip)
 //   __rp_saveProjectB64()       — DPF getState: export the project as a base64 .rplg chunk
 //   __rp_newProject()           — DPF setState(""): reset to an empty project
+//   __rp_appleLoadRom(path)     — Apple shell: import a user-supplied ROM through SystemsStore
+//   __rp_appleLoadMgb()         — development shell only: load the opt-in embedded mGB image
+//   __rp_applePrimarySystemId() — current focused/first system handle (never persisted separately)
+//   __rp_appleSetRoleConfig()   — Apple controls: edit canonical role settings
 //   __rp_ready                  — set true once composition + kernel load succeeded
 //
 // The C++ boundary stays string-only: base64 is done HERE (DPF state is NUL-terminated UTF-8; the
@@ -86,6 +90,56 @@ g.__rp_saveProjectB64 = (): string => {
 };
 
 g.__rp_newProject = (): void => project.newProject();
+
+// Apple hosts deliberately get only orchestration calls into the canonical store graph. Swift owns
+// document pickers and lifecycle, but never constructs an emulator or mutates a project schema itself.
+// A system id is a runtime handle, so it is looked up after each project restore rather than copied into
+// AU fullState. The App Store build does not contain mGB; in that flavour __rp_appleLoadMgb simply fails
+// at the SameBoy backend and the UI directs the user to import a licensed ROM.
+g.__rp_appleLoadRom = (path: string, savPath = ""): number => {
+  const result = project.systems.loadRom(path, savPath ? { explicitSav: savPath } : undefined);
+  return result && "system" in result ? result.system : 0;
+};
+
+g.__rp_appleLoadMgb = (): number => project.systems.loadMgb() ?? 0;
+
+g.__rp_applePrimarySystemId = (): number => {
+  const systems = project.systems.view();
+  return systems.find((system) => system.focused)?.id ?? systems[0]?.id ?? 0;
+};
+
+g.__rp_appleSetRoleConfig = (id: number, roleKind: string, configJson: string): boolean => {
+  let partial: unknown;
+  try { partial = JSON.parse(configJson); } catch { return false; }
+  if (!partial || typeof partial !== "object" || Array.isArray(partial)) return false;
+  return project.systems.setRoleConfig(id, roleKind, partial as Record<string, unknown>);
+};
+
+g.__rp_appleSaveSramB64 = (): string => {
+  const id = (g.__rp_applePrimarySystemId as () => number)();
+  const bytes = id ? project.systems.readSram(id) : null;
+  return bytes ? b64encode(bytes) : "";
+};
+
+g.__rp_appleLoadSramPath = (path: string): boolean => {
+  const id = (g.__rp_applePrimarySystemId as () => number)();
+  return id > 0 && project.systems.loadSram(id, path) !== null;
+};
+
+g.__rp_appleLoadStatePath = (path: string): boolean => {
+  const id = (g.__rp_applePrimarySystemId as () => number)();
+  return id > 0 && project.systems.loadState(id, path) !== null;
+};
+
+g.__rp_appleReset = (): boolean => {
+  const id = (g.__rp_applePrimarySystemId as () => number)();
+  return id > 0 && project.systems.reset(id) !== null;
+};
+
+g.__rp_appleSetGain = (gainDb: number): boolean => {
+  const id = (g.__rp_applePrimarySystemId as () => number)();
+  return id > 0 && project.systems.setGain(id, gainDb);
+};
 
 // Drive the file watcher from the UI idle loop (PluginUI::uiIdle, throttled). Drains native's changed
 // paths and reacts; a no-op when nothing changed. Returns void — the host ignores the result.
