@@ -47,3 +47,5 @@ packages/retroplug/.ui-build/
 
 # macOS Finder metadata
 .DS_Store
+/ios/.build
+/ios
