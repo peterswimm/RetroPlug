@@ -41,7 +41,11 @@ int main() {
         for (std::size_t lane = 2; lane < storage.size(); ++lane)
             for (float sample : storage[lane]) heardStem |= std::fabs(sample) > 1.0e-6f;
     }
+    // Autosave reads the Engine's published SRAM snapshot directly. It remains available while
+    // audio-thread ownership is active and does not need to suspend or enter the QuickJS control plane.
+    const auto liveSram = host.snapshotSram();
     host.suspend();
     assert(heardStem);
+    assert(liveSram == host.snapshotSram());
     return 0;
 }

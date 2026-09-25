@@ -20,6 +20,12 @@ namespace {
 constexpr AUAudioFrameCount kMaxFrames = 4096;
 constexpr std::size_t kBusCount = 5, kLaneCount = 10;
 constexpr AUParameterAddress kMode = 0, kDivisor = 1, kAutoStart = 2;
+constexpr AUParameterAddress kChannelBase = 16, kCcModeBase = 40, kCcScalingBase = 44;
+constexpr AUParameterAddress kCcNumberBase = 48, kMgbBaseChannel = 80;
+constexpr std::uint8_t kChannelDefaults[17] = {
+    1, 1, 1, 1, 1, 2, 3, 4, 5, 1, 2, 3, 4, 1, 2, 3, 4,
+};
+constexpr std::uint8_t kCcNumberDefaults[7] = {1, 2, 3, 7, 10, 11, 12};
 static NSString* const kProjectKey = @"retroplug-project-b64";
 
 struct RenderState {
@@ -40,6 +46,12 @@ std::string RPTemporaryFile(NSData* data, NSString* extension) {
     NSString* file = [NSString stringWithFormat:@"retroplug-%@.%@", NSUUID.UUID.UUIDString, extension];
     NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:file];
     return [data writeToFile:path atomically:YES] ? path.UTF8String : std::string{};
+}
+
+std::string RPJson(id object) {
+    NSData* data = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
+    if (!data) return {};
+    return std::string(static_cast<const char*>(data.bytes), data.length);
 }
 
 void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
@@ -97,8 +109,61 @@ void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
         min:1 max:8 unit:kAudioUnitParameterUnit_Indexed unitName:nil flags:rw valueStrings:nil dependentParameters:nil];
     AUParameter* autoStart = [AUParameterTree createParameterWithIdentifier:@"syncAutoStart" name:@"Auto Start" address:kAutoStart
         min:0 max:1 unit:kAudioUnitParameterUnit_Boolean unitName:nil flags:rw valueStrings:nil dependentParameters:nil];
-    _parameters = [AUParameterTree createTreeWithChildren:@[mode, divisor, autoStart]];
-    mode.value = RPMidiSyncModeMgb; divisor.value = 1;
+    NSArray<NSString*>* channelIds = @[
+        @"chSlaveSync", @"chMasterSync", @"chKeyboard", @"chMidiMap",
+        @"chMgbPu1", @"chMgbPu2", @"chMgbWav", @"chMgbNoi", @"chMgbPoly",
+        @"chMidiOutNotePu1", @"chMidiOutNotePu2", @"chMidiOutNoteWav", @"chMidiOutNoteNoi",
+        @"chMidiOutCcPu1", @"chMidiOutCcPu2", @"chMidiOutCcWav", @"chMidiOutCcNoi",
+    ];
+    NSArray<NSString*>* channelNames = @[
+        @"Slave Sync Channel", @"Master Sync Channel", @"Keyboard Channel", @"MIDI Map Channel",
+        @"mGB PU1 Channel", @"mGB PU2 Channel", @"mGB WAV Channel", @"mGB NOI Channel", @"mGB POLY Channel",
+        @"MIDI Out PU1 Note Ch", @"MIDI Out PU2 Note Ch", @"MIDI Out WAV Note Ch", @"MIDI Out NOI Note Ch",
+        @"MIDI Out PU1 CC Ch", @"MIDI Out PU2 CC Ch", @"MIDI Out WAV CC Ch", @"MIDI Out NOI CC Ch",
+    ];
+    NSMutableArray<AUParameter*>* params = [NSMutableArray arrayWithObjects:mode, divisor, autoStart, nil];
+    for (NSUInteger i = 0; i < RPMidiChannelSettingCount; ++i)
+        [params addObject:[AUParameterTree createParameterWithIdentifier:channelIds[i] name:channelNames[i]
+            address:kChannelBase+i min:1 max:16 unit:kAudioUnitParameterUnit_Indexed unitName:nil
+            flags:rw valueStrings:nil dependentParameters:nil]];
+
+    NSArray<NSString*>* voiceIds = @[@"Pu1", @"Pu2", @"Wav", @"Noi"];
+    NSArray<NSString*>* voiceNames = @[@"PU1", @"PU2", @"WAV", @"NOI"];
+    for (NSUInteger voice = 0; voice < RPMidiOutVoiceCount; ++voice) {
+        [params addObject:[AUParameterTree createParameterWithIdentifier:
+            [NSString stringWithFormat:@"ccMode%@", voiceIds[voice]]
+            name:[NSString stringWithFormat:@"%@ CC Mode", voiceNames[voice]] address:kCcModeBase+voice
+            min:0 max:1 unit:kAudioUnitParameterUnit_Indexed unitName:nil flags:rw
+            valueStrings:@[@"Single CC", @"7-CC Select"] dependentParameters:nil]];
+        [params addObject:[AUParameterTree createParameterWithIdentifier:
+            [NSString stringWithFormat:@"ccScaling%@", voiceIds[voice]]
+            name:[NSString stringWithFormat:@"%@ CC Scaling", voiceNames[voice]] address:kCcScalingBase+voice
+            min:0 max:1 unit:kAudioUnitParameterUnit_Boolean unitName:nil flags:rw
+            valueStrings:nil dependentParameters:nil]];
+        for (NSUInteger index = 0; index < RPMidiOutCcNumberCount; ++index)
+            [params addObject:[AUParameterTree createParameterWithIdentifier:
+                [NSString stringWithFormat:@"ccNum%@_%lu", voiceIds[voice], (unsigned long)index]
+                name:[NSString stringWithFormat:@"%@ CC#%lu", voiceNames[voice], (unsigned long)index]
+                address:kCcNumberBase+voice*RPMidiOutCcNumberCount+index min:0 max:127
+                unit:kAudioUnitParameterUnit_Indexed unitName:nil flags:rw valueStrings:nil dependentParameters:nil]];
+    }
+    [params addObject:[AUParameterTree createParameterWithIdentifier:@"chMgbBase" name:@"mGB Base Channel"
+        address:kMgbBaseChannel min:0 max:12 unit:kAudioUnitParameterUnit_Indexed unitName:nil
+        flags:rw valueStrings:nil dependentParameters:nil]];
+
+    _parameters = [AUParameterTree createTreeWithChildren:params];
+    mode.value = RPMidiSyncModeMgb;
+    divisor.value = 1;
+    autoStart.value = 0;
+    for (NSUInteger i = 0; i < RPMidiChannelSettingCount; ++i)
+        [_parameters parameterWithAddress:kChannelBase+i].value = kChannelDefaults[i];
+    for (NSUInteger voice = 0; voice < RPMidiOutVoiceCount; ++voice) {
+        [_parameters parameterWithAddress:kCcModeBase+voice].value = RPMidiOutCcModeMulti;
+        [_parameters parameterWithAddress:kCcScalingBase+voice].value = 1;
+        for (NSUInteger index = 0; index < RPMidiOutCcNumberCount; ++index)
+            [_parameters parameterWithAddress:kCcNumberBase+voice*RPMidiOutCcNumberCount+index].value = kCcNumberDefaults[index];
+    }
+    [_parameters parameterWithAddress:kMgbBaseChannel].value = 0;
     __weak RetroPlugAudioUnit* weakSelf = self;
     _parameters.implementorValueObserver = ^(AUParameter*, AUValue) { [weakSelf rpApplySync]; };
     return self;
@@ -115,9 +180,39 @@ void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
     NSInteger index = std::clamp<NSInteger>((NSInteger)[_parameters parameterWithAddress:kMode].value, 0, 8);
     NSUInteger divisor = std::max<NSUInteger>(1, (NSUInteger)[_parameters parameterWithAddress:kDivisor].value);
     BOOL autoStart = [_parameters parameterWithAddress:kAutoStart].value >= 0.5f;
-    NSString* json = [NSString stringWithFormat:@"{\"mode\":\"%@\",\"tempoDivisor\":%lu,\"autoStart\":%@}",
-                      modes[index], (unsigned long)divisor, autoStart ? @"true" : @"false"];
-    _state->host->setLsdjConfig(json.UTF8String);
+    NSMutableArray<NSNumber*>* channels = [NSMutableArray arrayWithCapacity:RPMidiChannelSettingCount];
+    for (NSUInteger i = 0; i < RPMidiChannelSettingCount; ++i)
+        [channels addObject:@((NSUInteger)std::clamp<AUValue>([_parameters parameterWithAddress:kChannelBase+i].value, 1, 16))];
+    NSMutableArray<NSString*>* ccModes = [NSMutableArray arrayWithCapacity:RPMidiOutVoiceCount];
+    NSMutableArray<NSNumber*>* ccScaling = [NSMutableArray arrayWithCapacity:RPMidiOutVoiceCount];
+    NSMutableArray<NSNumber*>* ccNumbers = [NSMutableArray arrayWithCapacity:RPMidiOutVoiceCount*RPMidiOutCcNumberCount];
+    for (NSUInteger voice = 0; voice < RPMidiOutVoiceCount; ++voice) {
+        [ccModes addObject:[_parameters parameterWithAddress:kCcModeBase+voice].value >= 0.5f ? @"multi" : @"single"];
+        [ccScaling addObject:@([_parameters parameterWithAddress:kCcScalingBase+voice].value >= 0.5f)];
+        for (NSUInteger cc = 0; cc < RPMidiOutCcNumberCount; ++cc)
+            [ccNumbers addObject:@((NSUInteger)std::clamp<AUValue>(
+                [_parameters parameterWithAddress:kCcNumberBase+voice*RPMidiOutCcNumberCount+cc].value, 0, 127))];
+    }
+    const NSUInteger mgbBase = (NSUInteger)std::clamp<AUValue>(
+        [_parameters parameterWithAddress:kMgbBaseChannel].value, 0, 12);
+    NSArray* mgbChannels = [channels subarrayWithRange:NSMakeRange(RPMidiChannelSettingMgbPu1, 5)];
+    NSDictionary* mgb = @{ @"channels": mgbChannels, @"baseChannel": @(mgbBase) };
+    NSDictionary* lsdj = @{
+        @"mode": modes[index], @"tempoDivisor": @(divisor), @"autoStart": @(autoStart),
+        @"slaveChannel": channels[RPMidiChannelSettingArduinoboySlave],
+        @"masterSyncChannel": channels[RPMidiChannelSettingMasterSync],
+        @"keyboardChannel": channels[RPMidiChannelSettingKeyboard],
+        @"midiMapChannel": channels[RPMidiChannelSettingMidiMap],
+        @"midiOutNoteChannels": [channels subarrayWithRange:NSMakeRange(RPMidiChannelSettingMidiOutNotePu1, 4)],
+        @"midiOutCcChannels": [channels subarrayWithRange:NSMakeRange(RPMidiChannelSettingMidiOutCcPu1, 4)],
+        @"midiOutCcModes": ccModes, @"midiOutCcScaling": ccScaling, @"midiOutCcNumbers": ccNumbers,
+    };
+    _state->host->setMgbConfig(RPJson(mgb));
+    _state->host->setLsdjConfig(RPJson(lsdj));
+    for (NSUInteger voice = 0; voice < RPMidiOutVoiceCount; ++voice) {
+        _state->host->setNoteOutChannel(voice, channels[RPMidiChannelSettingMidiOutNotePu1+voice].unsignedCharValue);
+        _state->host->setNoteOutCcChannel(voice, channels[RPMidiChannelSettingMidiOutCcPu1+voice].unsignedCharValue);
+    }
     _state->host->setNoteOutEnabled(index == RPMidiSyncModeNoteOut);
 }
 
@@ -198,7 +293,7 @@ void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
 }
 - (NSData*)saveSram { auto b = _state->host->saveSram(); return b.empty() ? nil : [NSData dataWithBytes:b.data() length:b.size()]; }
 - (NSData*)saveState { auto b = _state->host->saveState(); return b.empty() ? nil : [NSData dataWithBytes:b.data() length:b.size()]; }
-- (NSData*)snapshotSramForAutosave { return [self saveSram]; }
+- (NSData*)snapshotSramForAutosave { auto b = _state->host->snapshotSram(); return b.empty() ? nil : [NSData dataWithBytes:b.data() length:b.size()]; }
 - (BOOL)loadState:(NSData*)data error:(NSError**)error { BOOL ok = data.length && _state->host->loadStatePath(RPTemporaryFile(data,@"state")); if (!ok&&error)*error=RPError(RPCoreBridgeErrorStateRejected,@"Savestate rejected."); return ok; }
 - (BOOL)loadSram:(NSData*)data error:(NSError**)error { BOOL ok = data.length && _state->host->loadSramPath(RPTemporaryFile(data,@"sav")); if (!ok&&error)*error=RPError(RPCoreBridgeErrorSramRejected,@"Battery RAM rejected."); return ok; }
 - (BOOL)setModel:(RPSameBoyModel)model error:(NSError**)error {
@@ -214,12 +309,19 @@ void RPCopy(const std::vector<float>& left, const std::vector<float>& right,
 - (void)setSyncTempoDivisor:(NSUInteger)d { [_parameters parameterWithAddress:kDivisor].value=d; [self rpApplySync]; }
 - (void)setSyncAutoStart:(BOOL)on { [_parameters parameterWithAddress:kAutoStart].value=on; [self rpApplySync]; }
 - (void)setMidiChannel:(NSUInteger)c forSetting:(RPMidiChannelSetting)s {
-    if (s >= RPMidiChannelSettingMidiOutNotePu1 && s <= RPMidiChannelSettingMidiOutNoteNoi)
-        _state->host->setNoteOutChannel((std::size_t)s - RPMidiChannelSettingMidiOutNotePu1, (std::uint8_t)c);
+    if (s >= RPMidiChannelSettingCount) return;
+    [_parameters parameterWithAddress:kChannelBase+s].value = (AUValue)std::clamp<NSUInteger>(c, 1, 16);
 }
-- (void)setMgbBaseChannel:(NSUInteger)b { (void)b; }
-- (void)setMidiOutCcMode:(RPMidiOutCcMode)m forVoice:(NSUInteger)v { (void)m;(void)v; }
-- (void)setMidiOutCcScaling:(BOOL)s forVoice:(NSUInteger)v { (void)s;(void)v; }
-- (void)setMidiOutCcNumber:(NSUInteger)c atIndex:(NSUInteger)i forVoice:(NSUInteger)v { (void)c;(void)i;(void)v; }
+- (void)setMgbBaseChannel:(NSUInteger)b { [_parameters parameterWithAddress:kMgbBaseChannel].value = (AUValue)std::min<NSUInteger>(b, 12); }
+- (void)setMidiOutCcMode:(RPMidiOutCcMode)m forVoice:(NSUInteger)v {
+    if (v < RPMidiOutVoiceCount) [_parameters parameterWithAddress:kCcModeBase+v].value = m == RPMidiOutCcModeMulti ? 1 : 0;
+}
+- (void)setMidiOutCcScaling:(BOOL)s forVoice:(NSUInteger)v {
+    if (v < RPMidiOutVoiceCount) [_parameters parameterWithAddress:kCcScalingBase+v].value = s ? 1 : 0;
+}
+- (void)setMidiOutCcNumber:(NSUInteger)c atIndex:(NSUInteger)i forVoice:(NSUInteger)v {
+    if (v < RPMidiOutVoiceCount && i < RPMidiOutCcNumberCount)
+        [_parameters parameterWithAddress:kCcNumberBase+v*RPMidiOutCcNumberCount+i].value = (AUValue)std::min<NSUInteger>(c, 127);
+}
 - (BOOL)copyFrameInto:(uint32_t*)dst capacityPixels:(NSUInteger)n { return _state->host->copyFrame(dst,n); }
 @end

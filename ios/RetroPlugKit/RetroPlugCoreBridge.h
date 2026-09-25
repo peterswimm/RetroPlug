@@ -1,12 +1,6 @@
-// CoreBridge — the control-plane surface SwiftUI talks to. Everything here is
-// MAIN-THREAD-ONLY (asserted); the implementation routes each call to the
-// render thread through one of two channels:
-//
-//   * a lock-free SPSC command ring for realtime-cheap ops (buttons, reset,
-//     gain, fast-boot) — drained at the top of every render block;
-//   * a "bypass gate" for heavy ops (ROM swap, model change, save/load
-//     state & SRAM): the render block emits silence while the main thread
-//     mutates the emulator directly.
+// CoreBridge — the control-plane surface SwiftUI talks to. Apple lifecycle and
+// presentation enter the shared Engine/QueuedInvoker and canonical TypeScript
+// project store through AppleEngineHost; this layer never owns an emulator.
 //
 // Video is read via the emulator's lock-free triple buffer and is safe to
 // call at any time (returns NO before the first frame is published).
@@ -176,8 +170,8 @@ typedef NS_ENUM(uint32_t, RPSameBoyModel) {
 // mGB's saved synth settings (it keeps them in cartridge RAM).
 - (BOOL)loadEmbeddedMGBWithSram:(nullable NSData *)sram error:(NSError **)error;
 
-// Exact battery-RAM / savestate capture of the live emulator. nil when no
-// system, no battery on the cart, or the gate timed out.
+// Canonical battery-RAM / savestate capture. nil when no system exists or the
+// cart has no corresponding memory.
 - (nullable NSData *)saveSram;
 - (nullable NSData *)saveState;
 - (BOOL)loadState:(NSData *)state error:(NSError **)error;
@@ -208,8 +202,9 @@ typedef NS_ENUM(uint32_t, RPSameBoyModel) {
 
 // -- MIDI sync (also exposed as AU parameters, so DAW hosts can set them) ----
 
-// These route through the parameter tree (KVO-visible to hosts) into atomics
-// the render block reads each quantum; they survive ROM/model swaps.
+// These route through the KVO-visible AU parameter tree into the canonical
+// `mgb` / `lsdj-sync` role configs; they survive ROM/model swaps and AU state
+// restoration.
 - (void)setMidiSyncMode:(RPMidiSyncMode)mode;
 - (void)setSyncTempoDivisor:(NSUInteger)divisor; // 1–8; 24/divisor ticks per quarter
 - (void)setSyncAutoStart:(BOOL)on;               // tap START on transport rise (midiSync)

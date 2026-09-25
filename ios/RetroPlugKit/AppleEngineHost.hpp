@@ -36,13 +36,18 @@ public:
     bool loadSramPath(const std::string& path);
     bool loadStatePath(const std::string& path);
     std::vector<std::uint8_t> saveSram();
+    // Published by Engine::SnapshotRegistry during rendering. Safe for periodic autosave reads:
+    // no QuickJS/control-plane call and no render-thread ownership transfer is required.
+    std::vector<std::uint8_t> snapshotSram();
     std::vector<std::uint8_t> saveState();
     bool reset();
     bool setGainDb(double gainDb);
     bool setSameBoyConfig(const std::string& configJson);
+    bool setMgbConfig(const std::string& configJson);
     bool setLsdjConfig(const std::string& configJson);
     void setNoteOutEnabled(bool enabled);
     void setNoteOutChannel(std::size_t voice, std::uint8_t oneBasedChannel);
+    void setNoteOutCcChannel(std::size_t voice, std::uint8_t oneBasedChannel);
 
     std::uint32_t primarySystemId();
     bool pressButton(std::uint8_t button, bool down);

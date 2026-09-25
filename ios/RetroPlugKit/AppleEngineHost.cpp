@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -36,8 +37,10 @@ struct AppleEngineHost::Impl {
     bool isReady = false;
     std::string startupError;
     bool running = false;
+    std::atomic<std::uint32_t> primaryId{0};
     bool noteOutEnabled = false;
     std::array<std::uint8_t, 4> noteChannels{0, 1, 2, 3};
+    std::array<std::uint8_t, 4> ccChannels{0, 1, 2, 3};
     struct NoteVoice {
         int note = -1;
         std::uint16_t frequency = 0;
@@ -143,8 +146,14 @@ struct AppleEngineHost::Impl {
         return id;
     }
 
-    bool setRole(const char* role, const std::string& json) {
+    std::uint32_t refreshPrimaryId() {
         const auto id = callId("__rp_applePrimarySystemId");
+        primaryId.store(id, std::memory_order_release);
+        return id;
+    }
+
+    bool setRole(const char* role, const std::string& json) {
+        const auto id = primaryId.load(std::memory_order_acquire);
         if (!id) return false;
         JSContext* ctx = host.context();
         std::vector<JSValue> args{JS_NewUint32(ctx, id), JS_NewString(ctx, role),
@@ -213,7 +222,7 @@ struct AppleEngineHost::Impl {
         emit(frame, {std::uint8_t(0xe0 | noteChannels[voice]), std::uint8_t(bend & 0x7f), std::uint8_t(bend >> 7)});
     }
     void cc(std::size_t voice, std::uint8_t number, std::uint8_t value, std::uint32_t frame) {
-        emit(frame, {std::uint8_t(0xb0 | noteChannels[voice]), number, value});
+        emit(frame, {std::uint8_t(0xb0 | ccChannels[voice]), number, value});
     }
     void envelope(std::size_t voice, std::uint8_t value, std::uint32_t frame) {
         const auto previous = volume(voice, noteVoices[voice].envelope);
@@ -281,9 +290,17 @@ void AppleEngineHost::suspend() {
     impl_->running = false;
 }
 
-bool AppleEngineHost::loadProjectBase64(const std::string& b64) { return impl_->callBool("__rp_loadProjectB64", {b64}); }
+bool AppleEngineHost::loadProjectBase64(const std::string& b64) {
+    const bool ok = impl_->callBool("__rp_loadProjectB64", {b64});
+    if (ok) impl_->refreshPrimaryId();
+    return ok;
+}
 std::string AppleEngineHost::saveProjectBase64() { return impl_->callString("__rp_saveProjectB64"); }
-bool AppleEngineHost::loadProjectPath(const std::string& path) { return impl_->callBool("__rp_loadProjectPath", {path}); }
+bool AppleEngineHost::loadProjectPath(const std::string& path) {
+    const bool ok = impl_->callBool("__rp_loadProjectPath", {path});
+    if (ok) impl_->refreshPrimaryId();
+    return ok;
+}
 bool AppleEngineHost::loadRomPath(const std::string& rom, const std::string& sav) {
     JSContext* ctx = impl_->host.context();
     std::vector<JSValue> args{JS_NewString(ctx, rom.c_str()), JS_NewString(ctx, sav.c_str())};
@@ -292,13 +309,19 @@ bool AppleEngineHost::loadRomPath(const std::string& rom, const std::string& sav
     std::uint32_t id = 0;
     if (!JS_IsException(result)) JS_ToUint32(ctx, &id, result);
     JS_FreeValue(ctx, result);
+    if (id) impl_->primaryId.store(id, std::memory_order_release);
     return id != 0;
 }
-bool AppleEngineHost::loadEmbeddedMgb() { return impl_->callId("__rp_appleLoadMgb") != 0; }
+bool AppleEngineHost::loadEmbeddedMgb() {
+    const auto id = impl_->callId("__rp_appleLoadMgb");
+    if (id) impl_->primaryId.store(id, std::memory_order_release);
+    return id != 0;
+}
 bool AppleEngineHost::loadSramPath(const std::string& path) { return impl_->callBool("__rp_appleLoadSramPath", {path}); }
 bool AppleEngineHost::loadStatePath(const std::string& path) { return impl_->callBool("__rp_appleLoadStatePath", {path}); }
 bool AppleEngineHost::reset() { return impl_->globalBool("__rp_appleReset"); }
 bool AppleEngineHost::setSameBoyConfig(const std::string& json) { return impl_->setRole("sameboy", json); }
+bool AppleEngineHost::setMgbConfig(const std::string& json) { return impl_->setRole("mgb", json); }
 bool AppleEngineHost::setLsdjConfig(const std::string& json) { return impl_->setRole("lsdj-sync", json); }
 void AppleEngineHost::setNoteOutEnabled(bool enabled) {
     if (impl_->noteOutEnabled == enabled) return;
@@ -309,6 +332,9 @@ void AppleEngineHost::setNoteOutEnabled(bool enabled) {
 }
 void AppleEngineHost::setNoteOutChannel(std::size_t voice, std::uint8_t oneBasedChannel) {
     if (voice < impl_->noteChannels.size()) impl_->noteChannels[voice] = std::uint8_t(std::clamp<int>(oneBasedChannel, 1, 16) - 1);
+}
+void AppleEngineHost::setNoteOutCcChannel(std::size_t voice, std::uint8_t oneBasedChannel) {
+    if (voice < impl_->ccChannels.size()) impl_->ccChannels[voice] = std::uint8_t(std::clamp<int>(oneBasedChannel, 1, 16) - 1);
 }
 bool AppleEngineHost::setGainDb(double gainDb) {
     JSContext* ctx = impl_->host.context();
@@ -328,12 +354,17 @@ std::vector<std::uint8_t> AppleEngineHost::saveSram() {
     auto bytes = id ? impl_->engine.readSram(id) : std::nullopt;
     return !b64.empty() && bytes ? std::move(*bytes) : std::vector<std::uint8_t>{};
 }
+std::vector<std::uint8_t> AppleEngineHost::snapshotSram() {
+    const auto id = impl_->primaryId.load(std::memory_order_acquire);
+    auto bytes = id ? impl_->engine.readSram(id) : std::nullopt;
+    return bytes ? std::move(*bytes) : std::vector<std::uint8_t>{};
+}
 std::vector<std::uint8_t> AppleEngineHost::saveState() {
     const auto id = primarySystemId();
     auto bytes = id ? impl_->engine.readState(id) : std::nullopt;
     return bytes ? std::move(*bytes) : std::vector<std::uint8_t>{};
 }
-std::uint32_t AppleEngineHost::primarySystemId() { return impl_->callId("__rp_applePrimarySystemId"); }
+std::uint32_t AppleEngineHost::primarySystemId() { return impl_->refreshPrimaryId(); }
 bool AppleEngineHost::pressButton(std::uint8_t button, bool down) {
     const auto id = primarySystemId();
     if (!id) return false;
