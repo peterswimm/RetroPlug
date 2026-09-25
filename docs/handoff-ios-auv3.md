@@ -1,8 +1,16 @@
 # iOS/AUv3 handoff for Tommy
 
-Branch: `codex/ios-auv3-engine`, based on `upstream/main` at `2d602f38` and
-published to Peter's fork for review/cherry-picking. Nothing has been signed,
-submitted to an app store, or released.
+Branches:
+
+- `codex/ios-auv3-engine` is the Engine-backed iOS/AUv3 port, based on
+  `upstream/main` at `2d602f38`.
+- `codex/ios-midi-config-parity` is the focused follow-up that restores the
+  useful MIDI-editor configuration and nonblocking autosave behavior from the
+  historical port. It can be merged as a branch or cherry-picked after the
+  Engine-backed port.
+
+Both are published to Peter's fork for review/cherry-picking. Nothing has been
+signed, submitted to an app store, or released.
 
 ## Purpose and architecture
 
@@ -19,6 +27,20 @@ and the player workflows. Note Out uses an opt-in SameBoy APU register-write
 callback. The iOS native target registers SameBoy only and does not link Mesen.
 The control-plane bytecode is embedded in the binary.
 
+The parity follow-up makes the historical editor settings useful without
+reviving its duplicate native MIDI engine: all 17 mode/channel assignments,
+mGB base-channel remapping, and the four-voice MI.OUT CC mode/scaling/number
+matrix are AU parameters whose values feed the canonical `mgb` and `lsdj-sync`
+TypeScript roles. The defaults match the Arduinoboy editor/firmware, so these
+features work immediately but remain host-automatable and state-restorable.
+Note Out separately honors each voice's note and CC output channels.
+
+Autosave now reads the Engine's tear-free published SRAM snapshot directly.
+It does not enter QuickJS, suspend rendering, or take ownership away from the
+audio thread; an opportunistic snapshot may be up to the normal publication
+interval stale. Explicit save operations retain the canonical control-plane
+path.
+
 ## Build and tests
 
 ```sh
@@ -34,19 +56,24 @@ cmake --build build --target retroplug-apple-host-test -j8
 pnpm test
 ```
 
-Verified on 2026-09-20, with the Xcode runtime checks repeated on 2026-09-22:
+Verified on 2026-09-20, with the parity checks repeated on 2026-09-23:
 
 - `retroplug-apple-host-test`: exit 0, including control-plane startup, mGB
-  project round-trip, lifecycle suspend/resume, and real per-channel audio.
+  project round-trip, lifecycle suspend/resume, real per-channel audio, and an
+  SRAM snapshot read while audio-thread ownership is active.
 - `ios/build-native.sh`: exit 0 for arm64 device and simulator slices.
 - unsigned arm64 Release `xcodebuild`: exit 0 for both generic iOS device and
   simulator builds, including the container app and embedded AUv3.
-- XCTest lifecycle/state/bus test: executed and passed on an iPhone 17 / iOS
-  27.0 arm64 simulator (not merely compiled).
+- XCTest lifecycle/state/bus/parameter test: executed and passed on an iPhone
+  17 / iOS 27.0 arm64 simulator (not merely compiled). It exercises all 57 AU
+  parameters, including mGB and MI.OUT setters.
 - bare QuickJS startup now supplies the guarded UTF-8 Web globals required by
   the canonical control plane and reports rejected module promises with their
   JavaScript stack instead of a generic readiness failure.
 - TypeScript suite: 145 test files passed.
+- TypeScript MIDI golden coverage includes mGB channel/base remapping,
+  per-mode input filtering, configured Master Sync output, and the firmware's
+  MI.OUT note/CC routing and scaling matrix.
 - Native suite: 117 test files passed (ROM-dependent cases skipped when the
   external ROM corpus was unavailable).
 - Plugin binaries passed except `retroplug-watcher-test`; its FSEvents checks

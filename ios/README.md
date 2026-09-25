@@ -47,9 +47,15 @@ App Group entitlement to both app and extension and put its identifier in the
 - `RetroPlugEngineAudioUnit.mm` exposes the mix plus Pulse 1, Pulse 2, Wave,
   and Noise stereo busses, AU MIDI input/output, and canonical `.rplg` data in
   `fullState`.
+- Its 57-parameter AU tree includes the complete historical MIDI editor grid:
+  mode/divisor/auto-start, 17 channel assignments, mGB base channel, and the
+  four-voice MI.OUT CC mode/scaling/number matrix. These configure the shared
+  TypeScript roles rather than duplicating MIDI translation in Objective-C++.
 - `SharedProjectStore` optionally mirrors the canonical state into an App Group.
 - The opt-in SameBoy APU register callback backs Note Out. It is disabled when
   the mode is inactive.
+- Opportunistic SRAM autosave reads the Engine's periodically published,
+  tear-free snapshot without blocking or entering the QuickJS control plane.
 
 The player retains ROM import, battery saves, savestates, LSDj song management,
 touch/controller input, MIDI modes, and video display. App Store builds require
