@@ -19,7 +19,13 @@ import {
   isExtendedScancode,
   toGbSerialByte,
 } from "./lsdjKeyboardMap";
-import { arduinoboyDecodeSerialOut, arduinoboyMasterSyncBlock, type ArduinoboyState, type MasterSyncState } from "./lsdjArduinoboy";
+import {
+  arduinoboyDecodeSerialOut,
+  arduinoboyMasterSyncBlock,
+  type ArduinoboyMidiConfig,
+  type ArduinoboyState,
+  type MasterSyncState,
+} from "./lsdjArduinoboy";
 import { RISA_PPQN, RISA_START, RISA_CLOCK, RISA_STOP, risaLocate, risaArmPacket } from "./risaSync";
 import { SMS_SYNC_PPQN, SMS_SYNC_COUNTER_MOD, syncLevelsFor, type SmsSyncMachine } from "./smsSync";
 import { registerControllerRole } from "./controllerRole";
@@ -36,7 +42,45 @@ const forwardMidiToSerial: SystemBehavior = (c) => {
     for (let j = 0; j < data.length; j++) c.pushSerialIn(e.frame, data[j]);
   }
 };
-const mgb = forwardMidiToSerial;
+const DEFAULT_MGB_CHANNELS = [1, 2, 3, 4, 5];
+const DEFAULT_NOTE_CHANNELS = [1, 2, 3, 4];
+const DEFAULT_CC_CHANNELS = [1, 2, 3, 4];
+const DEFAULT_CC_MODES = ["multi", "multi", "multi", "multi"] as const;
+const DEFAULT_CC_SCALING = [true, true, true, true];
+const DEFAULT_CC_NUMBERS = [
+  1, 2, 3, 7, 10, 11, 12,
+  1, 2, 3, 7, 10, 11, 12,
+  1, 2, 3, 7, 10, 11, 12,
+  1, 2, 3, 7, 10, 11, 12,
+];
+
+const channelNibble = (value: unknown, fallback = 1) =>
+  Math.max(1, Math.min(16, typeof value === "number" ? value : fallback)) - 1;
+
+// mGB's five voices are fixed to MIDI channels 1..5. The role accepts arbitrary input assignments
+// and rewrites them to those fixed channels; a nonzero baseChannel provides one contiguous block per
+// plugin instance. System messages remain global and pass through verbatim.
+const mgb: SystemBehavior = (c) => {
+  const config = c.config as { channels?: number[]; baseChannel?: number };
+  const channels = config.channels ?? DEFAULT_MGB_CHANNELS;
+  const base = Math.max(0, Math.min(12, config.baseChannel ?? 0));
+  for (const event of c.midi) {
+    const data = event.data;
+    if (data.length === 0) continue;
+    const status = data[0];
+    if (status >= 0xf0) {
+      for (let i = 0; i < data.length; i++) c.pushSerialIn(event.frame, data[i]);
+      continue;
+    }
+    const inputChannel = status & 0x0f;
+    const target = base > 0
+      ? inputChannel - (base - 1)
+      : channels.findIndex((channel) => channelNibble(channel) === inputChannel);
+    if (target < 0 || target >= 5) continue;
+    c.pushSerialIn(event.frame, (status & 0xf0) | target);
+    for (let i = 1; i < data.length; i++) c.pushSerialIn(event.frame, data[i]);
+  }
+};
 
 // Forward every routed host-MIDI message straight to the core's onMidi (the emitCoreMidi sink). The
 // NES twin of `mgb`: a core with no serial port (Mesen) receives MIDI here instead of over serial.
@@ -79,6 +123,7 @@ const arduinoboy: SystemBehavior = (c) => {
   }
   for (const e of c.midi) {
     if (!isNoteOn(e.data[0])) continue;
+    if (channelOf(e.data[0]) !== channelNibble(c.config.slaveChannel)) continue;
     const note = e.data[1];
     if (note === 24) st.playing = true;
     else if (note === 25) st.playing = false;
@@ -117,13 +162,14 @@ const midiMap: SystemBehavior = (c) => {
   for (const e of c.midi) {
     const status = e.data[0];
     const note = e.data.length >= 2 ? e.data[1] : 0;
+    const relativeChannel = channelOf(status) - channelNibble(c.config.midiMapChannel);
     if (isNoteOn(status)) {
-      const row = midiMapRow(channelOf(status), note);
+      const row = midiMapRow(relativeChannel, note);
       if (row < 0) continue;
       c.pushSerialIn(e.frame, row & 0xff);
       st.lastRow = row;
     } else if (isNoteOff(status)) {
-      if (midiMapRow(channelOf(status), note) === st.lastRow) {
+      if (midiMapRow(relativeChannel, note) === st.lastRow) {
         c.pushSerialIn(e.frame, MIDIMAP_NOTEOFF);
         st.lastRow = -1;
       }
@@ -155,6 +201,7 @@ const keyboardMidi: SystemBehavior = (c) => {
   if (st.octave === undefined) st.octave = 4;
   for (const e of c.midi) {
     if (!isNoteOn(e.data[0])) continue;
+    if (channelOf(e.data[0]) !== channelNibble(c.config.keyboardChannel)) continue;
     let note = e.data[1];
     if (note >= KEYBOARD_NOTE_START) {
       note -= KEYBOARD_NOTE_START;
@@ -179,7 +226,16 @@ const keyboardMidi: SystemBehavior = (c) => {
 const arduinoboyMaster: SystemBehavior = (c) => {
   if (c.serialOut.length === 0) return;
   const st = c.state as ArduinoboyState;
-  arduinoboyDecodeSerialOut(c.serialOut, st, (data) => c.emitMidiOut(0, data));
+  const oneBased = (values: unknown, fallback: readonly number[]) =>
+    Array.isArray(values) ? values.map((v, i) => channelNibble(v, fallback[i])) : fallback.map((v) => v - 1);
+  const config: ArduinoboyMidiConfig = {
+    noteChannels: oneBased(c.config.midiOutNoteChannels, DEFAULT_NOTE_CHANNELS),
+    ccChannels: oneBased(c.config.midiOutCcChannels, DEFAULT_CC_CHANNELS),
+    ccModes: (c.config.midiOutCcModes as ("single" | "multi")[] | undefined) ?? [...DEFAULT_CC_MODES],
+    ccScaling: (c.config.midiOutCcScaling as boolean[] | undefined) ?? DEFAULT_CC_SCALING,
+    ccNumbers: (c.config.midiOutCcNumbers as number[] | undefined) ?? DEFAULT_CC_NUMBERS,
+  };
+  arduinoboyDecodeSerialOut(c.serialOut, st, (data) => c.emitMidiOut(0, data), config);
 };
 
 // Master Sync (mode 8, == Arduinoboy firmware Mode 2, SYNC=LSDJ): LSDj self-clocks as the serial master
@@ -188,6 +244,7 @@ const arduinoboyMaster: SystemBehavior = (c) => {
 // mode 7 this runs EVERY block — an empty serial-out block is how the idle stop is detected.
 const masterSync: SystemBehavior = (c) => {
   const st = c.state as MasterSyncState;
+  st.channel = channelNibble(c.config.masterSyncChannel);
   arduinoboyMasterSyncBlock(c.serialOut, st, (data) => c.emitMidiOut(0, data));
 };
 
@@ -323,7 +380,18 @@ const midiRouting: ProjectBehavior = (c) => {
 
 /** Register the built-in DSP-thread roles into `registry`. */
 export function registerDspRoles(registry: RoleRegistry): void {
-  registry.registerRole({ kind: "mgb", category: "feature", scope: "system", schema: z.object({}), dsp: mgb });
+  const midiChannel = z.number().int().min(1).max(16);
+  const fourChannels = z.array(midiChannel).length(4);
+  registry.registerRole({
+    kind: "mgb",
+    category: "feature",
+    scope: "system",
+    schema: z.object({
+      channels: z.array(midiChannel).length(5).default(DEFAULT_MGB_CHANNELS),
+      baseChannel: z.number().int().min(0).max(12).default(0),
+    }),
+    dsp: mgb,
+  });
   // NES host-MIDI: forward routed MIDI to the core's onMidi (→ the always-attached N8 FIFO). Attached to
   // every NES ROM by the rom provider (romProviders.ts), mirroring the native always-on N8 role.
   registry.registerRole({ kind: "nes-n8-midi", category: "feature", scope: "system", schema: z.object({}), dsp: forwardMidiToCore });
@@ -350,7 +418,20 @@ export function registerDspRoles(registry: RoleRegistry): void {
     // 24-PPQN clock (24/divisor) for MidiSync + MidiSyncArduinoboy; the menu offers 1/2/4/8. autoStart
     // taps START on the host transport rise to auto-arm a SYNC=MIDI (MidiSync) cart — needed for a
     // headless DAW render, off by default so normal MidiSync keeps its manual-arm behaviour.
-    schema: z.object({ mode: enumField(LSDJ_MODE_VALUES, "midiSync"), tempoDivisor: clampedInt(1, 8, 1), autoStart: boolField(false) }),
+    schema: z.object({
+      mode: enumField(LSDJ_MODE_VALUES, "midiSync"),
+      tempoDivisor: clampedInt(1, 8, 1),
+      autoStart: boolField(false),
+      slaveChannel: midiChannel.default(1),
+      masterSyncChannel: midiChannel.default(1),
+      keyboardChannel: midiChannel.default(1),
+      midiMapChannel: midiChannel.max(15).default(1),
+      midiOutNoteChannels: fourChannels.default(DEFAULT_NOTE_CHANNELS),
+      midiOutCcChannels: fourChannels.default(DEFAULT_CC_CHANNELS),
+      midiOutCcModes: z.array(z.enum(["single", "multi"])).length(4).default([...DEFAULT_CC_MODES]),
+      midiOutCcScaling: z.array(z.boolean()).length(4).default(DEFAULT_CC_SCALING),
+      midiOutCcNumbers: z.array(z.number().int().min(0).max(127)).length(28).default(DEFAULT_CC_NUMBERS),
+    }),
     dsp: lsdjSync,
     onConstruct: lsdjSeedSav,
   });

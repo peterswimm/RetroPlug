@@ -40,6 +40,34 @@ test("mgb forwards each routed MIDI byte to its system's serial", () => {
   ]);
 });
 
+test("mgb remaps configured channels to its five fixed voices and drops unassigned channels", () => {
+  const k = kernel();
+  k.setSystems({
+    project: [{ kind: "midi-routing", config: { mode: "sendToAll" } }],
+    systems: [{ id: 1, pipeline: [{ kind: "mgb", config: { channels: [6, 7, 8, 9, 10] } }] }],
+  });
+  const out = k.processBlock({ ...baseDyn(), midiIn: [
+    { frame: 3, data: [0x96, 61, 99] }, // configured channel 7 -> mGB voice/channel 2
+    { frame: 4, data: [0x90, 62, 99] }, // unassigned channel 1 -> dropped
+    { frame: 5, data: [0xf8] },          // system realtime -> unchanged
+  ] });
+  expect(out.serialIn.map((event) => [event.frame, event.byte])).toEqual([
+    [3, 0x91], [3, 61], [3, 99], [5, 0xf8],
+  ]);
+});
+
+test("mgb baseChannel assigns a contiguous five-channel block", () => {
+  const k = kernel();
+  k.setSystems({
+    project: [{ kind: "midi-routing", config: { mode: "sendToAll" } }],
+    systems: [{ id: 1, pipeline: [{ kind: "mgb", config: { baseChannel: 9 } }] }],
+  });
+  const out = k.processBlock({ ...baseDyn(), midiIn: [
+    { frame: 0, data: [0x9a, 64, 100] }, // input channel 11 -> voice 3 / status channel 2
+  ] });
+  expect(out.serialIn.map((event) => event.byte)).toEqual([0x92, 64, 100]);
+});
+
 test("nes-n8-midi forwards each routed MIDI message to its system's core (emitCoreMidi)", () => {
   const k = kernel();
   k.setSystems({

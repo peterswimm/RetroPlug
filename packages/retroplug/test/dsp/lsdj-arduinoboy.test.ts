@@ -51,6 +51,31 @@ test("ArduinoboyMaster: 0x74..0x77 + value → Control Change", () => {
   expect(decode([0x74, 64])).toEqual([[0xb0, 4, 64]]); // CC ch 0, CC# = m (simplified), value 64
 });
 
+test("ArduinoboyMaster applies per-voice channels and the firmware CC matrix", () => {
+  const config = {
+    noteChannels: [4, 5, 6, 7],
+    ccChannels: [8, 9, 10, 11],
+    ccModes: ["multi", "single", "multi", "multi"] as const,
+    ccScaling: [true, true, false, true],
+    ccNumbers: [
+      20, 21, 22, 23, 24, 25, 26,
+      30, 31, 32, 33, 34, 35, 36,
+      40, 41, 42, 43, 44, 45, 46,
+      50, 51, 52, 53, 54, 55, 56,
+    ],
+  };
+  const out: number[][] = [];
+  const state: ArduinoboyState = {};
+  for (const byte of [0x70, 60, 0x74, 0x21, 0x75, 0x37, 0x7a, 9])
+    arduinoboyDecodeByte(byte, state, (data) => out.push(data), config);
+  expect(out).toEqual([
+    [0x94, 60, 0x7f], // voice 0 note channel = zero-based 4
+    [0xb8, 22, 8],    // multi: high digit 2 selects CC#2, low digit 1 scales to 8
+    [0xb9, 30, 62],   // single: CC#0, trunc(0x37 / 0x6f * 0x7f)
+    [0xc6, 9],        // program change shares voice 2's note channel
+  ]);
+});
+
 test("ArduinoboyMaster: 0x78..0x7B + value → Program Change", () => {
   expect(decode([0x7a, 7])).toEqual([[0xc2, 7]]); // PC ch 2, patch 7
 });
@@ -203,4 +228,28 @@ test("lsdj-sync mode 8: kernel fans serialOut to the master-sync role → clock 
   const out = k.processBlock({ ...baseDyn(), serialOut: [{ system: 1, byte: 5 }, { system: 1, byte: 6 }] });
   expect(out.midiOut.map((m) => m.data)).toEqual([[0x90, 5, 0x7f], [0xfa], [0xf8], [0xf8]]);
   expect(out.serialIn.length).toBe(0); // master sync is a pure decoder — no serial-in
+});
+
+test("lsdj-sync routes MI.OUT and Master Sync to configured output channels", () => {
+  const reg = new RoleRegistry();
+  registerDspRoles(reg);
+  const midiOutKernel = new DspKernel(reg);
+  midiOutKernel.setSystems({
+    systems: [{ id: 1, pipeline: [{ kind: "lsdj-sync", config: {
+      mode: "midiOut", midiOutNoteChannels: [9, 10, 11, 12],
+      midiOutCcChannels: [13, 14, 15, 16],
+    } }] }],
+  });
+  const framed = (cmd: number) => ({ system: 1, byte: 0x80 | cmd });
+  const midi = midiOutKernel.processBlock({
+    ...baseDyn(), serialOut: [framed(0x70), framed(60), framed(0x74), framed(0x21)],
+  });
+  expect(midi.midiOut.map((event) => event.data)).toEqual([[0x98, 60, 0x7f], [0xbc, 3, 8]]);
+
+  const masterKernel = new DspKernel(reg);
+  masterKernel.setSystems({ systems: [{ id: 2, pipeline: [{ kind: "lsdj-sync", config: {
+    mode: "masterSync", masterSyncChannel: 12,
+  } }] }] });
+  const master = masterKernel.processBlock({ ...baseDyn(), serialOut: [{ system: 2, byte: 5 }] });
+  expect(master.midiOut[0].data).toEqual([0x9b, 5, 0x7f]);
 });

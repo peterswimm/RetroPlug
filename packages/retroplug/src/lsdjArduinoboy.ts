@@ -49,21 +49,49 @@ export interface ArduinoboyState {
   bitCount?: number;
 }
 
+/** User-facing Arduinoboy Editor routing. Channels are zero-based here; persisted role config keeps
+ * them one-based so the UI and AU parameter values match MIDI conventions. Omitted fields preserve
+ * the historical decoder defaults. */
+export interface ArduinoboyMidiConfig {
+  noteChannels?: readonly number[];
+  ccChannels?: readonly number[];
+  ccModes?: readonly ("single" | "multi")[];
+  ccScaling?: readonly boolean[];
+  ccNumbers?: readonly number[]; // four contiguous groups of seven
+}
+
+const channelAt = (values: readonly number[] | undefined, voice: number) =>
+  Math.max(0, Math.min(15, values?.[voice] ?? voice));
+const ccNumberAt = (values: readonly number[] | undefined, voice: number, index: number) =>
+  Math.max(0, Math.min(127, values?.[voice * 7 + index] ?? [1, 2, 3, 7, 10, 11, 12][index]));
+
 // Complete a pending command with its value byte. `m` is the 0..11 command id (byte-0x70); channels are
 // 0-indexed (GB channel 0..3 → MIDI channel low nibble). Mirrors ArduinoboyMaster::emitCommandValue.
-function emitCommandValue(m: number, v: number, emit: MidiEmit): void {
+function emitCommandValue(m: number, v: number, emit: MidiEmit, config?: ArduinoboyMidiConfig): void {
   if (m < 4) {
-    const ch = m;
+    const ch = channelAt(config?.noteChannels, m);
     // value 0 → NoteOff. The firmware sends a NoteOff for the channel's most-recent note; without that
     // running state we emit NoteOff on note 0 — an unambiguous "channel quiet" signal downstream.
     if (v === 0) emit([MIDI_NOTE_OFF_BASE | ch, 0, 0]);
     else emit([MIDI_NOTE_ON_BASE | ch, v & 0x7f, 0x7f]);
   } else if (m < 8) {
-    const ch = m - 4;
-    // Simplest of the firmware's CC-encoding modes: CC number = m, value = v (documented simplification).
-    emit([MIDI_CC_BASE | ch, m, v & 0x7f]);
+    const voice = m - 4;
+    if (!config) {
+      // Compatibility for callers using the decoder as a low-level primitive. The lsdj-sync role
+      // always supplies its validated firmware-style matrix below.
+      emit([MIDI_CC_BASE | voice, m, v & 0x7f]);
+      return;
+    }
+    const ch = channelAt(config?.ccChannels, voice);
+    const multi = (config?.ccModes?.[voice] ?? "multi") === "multi";
+    const scaled = config?.ccScaling?.[voice] ?? true;
+    const index = multi ? ((v >> 4) & 0x07) : 0;
+    const number = ccNumberAt(config?.ccNumbers, voice, index);
+    let value = v;
+    if (scaled) value = multi ? (v & 0x0f) * 8 : Math.trunc((v / 0x6f) * 0x7f);
+    emit([MIDI_CC_BASE | ch, number, value & 0x7f]);
   } else if (m < 0x0c) {
-    const ch = m - 8;
+    const ch = channelAt(config?.noteChannels, m - 8);
     emit([MIDI_PC_BASE | ch, v & 0x7f]);
   }
   // m >= 0x0C: undefined per the firmware; drop.
@@ -71,7 +99,8 @@ function emitCommandValue(m: number, v: number, emit: MidiEmit): void {
 
 /** Feed one already-de-framed protocol byte (0x00..0x7F) through the Arduinoboy state machine, pushing
  *  decoded MIDI into `emit`. The TS twin of ArduinoboyMaster::feed. */
-export function arduinoboyDecodeByte(byte: number, state: ArduinoboyState, emit: MidiEmit): void {
+export function arduinoboyDecodeByte(byte: number, state: ArduinoboyState, emit: MidiEmit,
+                                     config?: ArduinoboyMidiConfig): void {
   // Not part of the documented MI.OUT protocol — drop defensively without disturbing pending state.
   if (byte >= 0x80) return;
 
@@ -92,7 +121,7 @@ export function arduinoboyDecodeByte(byte: number, state: ArduinoboyState, emit:
 
   // Value byte (0x00..0x6F). Only meaningful when a command is pending.
   if (state.pendingValueExpected) {
-    emitCommandValue(state.pendingCmd ?? 0, byte, emit);
+    emitCommandValue(state.pendingCmd ?? 0, byte, emit, config);
     state.pendingValueExpected = false;
     state.pendingCmd = 0;
   }
@@ -109,7 +138,8 @@ export function arduinoboyReset(state: ArduinoboyState): void {
 /** Decode a block's worth of RAW captured serial-out bytes: reconstruct the MSB-first bit stream,
  *  strip the flag-gated framing, and drive the byte protocol. Partial bits (a frame split across a
  *  block boundary) persist in `state` for the next call. */
-export function arduinoboyDecodeSerialOut(bytes: number[], state: ArduinoboyState, emit: MidiEmit): void {
+export function arduinoboyDecodeSerialOut(bytes: number[], state: ArduinoboyState, emit: MidiEmit,
+                                          config?: ArduinoboyMidiConfig): void {
   let acc = state.bitAcc ?? 0;
   let count = state.bitCount ?? 0;
 
@@ -130,7 +160,7 @@ export function arduinoboyDecodeSerialOut(bytes: number[], state: ArduinoboyStat
       if (count < 8) break; // flag says a 7-bit payload follows, but it hasn't fully arrived yet
       const cmd = (acc >>> (count - 8)) & 0x7f; // the 7 payload bits after the flag
       count -= 8;
-      arduinoboyDecodeByte(cmd, state, emit);
+      arduinoboyDecodeByte(cmd, state, emit, config);
     }
 
     // Keep only the still-buffered low `count` bits so `acc` can't overflow a 32-bit shift over a long run.

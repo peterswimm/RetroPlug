@@ -44,6 +44,19 @@ test("MidiMap: ch0 NoteOn → row byte, matching NoteOff → 0xFE, ch1 → row+1
   expect(bytes(k.processBlock({ ...baseDyn(), midiIn: [noteOn(1, 5)] }))).toEqual([133]); // ch1 note 5 → 5 + 128
 });
 
+test("mode channel assignments filter Arduinoboy, MidiMap, and KeyboardMidi input", () => {
+  const ab = lsdj("midiSyncArduinoboy", { slaveChannel: 6 });
+  expect(bytes(ab.processBlock({ ...baseDyn(), midiIn: [noteOn(0, 40), noteOn(5, 40)] }))).toEqual([10]);
+
+  const map = lsdj("midiMap", { midiMapChannel: 7 });
+  expect(bytes(map.processBlock({ ...baseDyn(), midiIn: [noteOn(0, 5), noteOn(6, 5), noteOn(7, 5)] })))
+    .toEqual([5, 133]);
+
+  const keyboard = lsdj("keyboardMidi", { keyboardChannel: 4 });
+  expect(bytes(keyboard.processBlock({ ...baseDyn(), midiIn: [noteOn(0, 48)] }))).toEqual([]);
+  expect(bytes(keyboard.processBlock({ ...baseDyn(), midiIn: [noteOn(3, 48)] })).length > 0).toBeTruthy();
+});
+
 test("MidiSyncArduinoboy: note 24 arms the clock behind a 0xFA bookend; note 25 stops it with 0xFC", () => {
   const k = lsdj("midiSyncArduinoboy");
   expect(k.processBlock({ ...baseDyn() }).serialIn.length).toBe(0); // idle: not playing, transport off

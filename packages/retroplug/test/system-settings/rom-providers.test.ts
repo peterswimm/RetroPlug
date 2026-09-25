@@ -40,7 +40,28 @@ test("LSDj attaches lsdj-sync (MidiSync default) + lsdj-assets, case-insensitive
   const lower = registry().defaultRoles("sameboy", "gb", headerWithTitle("LSDj-v9.4.2"));
   expect(lower).toEqual([
     { kind: "sameboy", config: sameboyRoleConfig() },
-    { kind: "lsdj-sync", config: { mode: "midiSync", tempoDivisor: 1, autoStart: false } }, // MidiSync @ 24 PPQN (divisor 1)
+    {
+      kind: "lsdj-sync",
+      config: {
+        mode: "midiSync",
+        tempoDivisor: 1,
+        autoStart: false,
+        slaveChannel: 1,
+        masterSyncChannel: 1,
+        keyboardChannel: 1,
+        midiMapChannel: 1,
+        midiOutNoteChannels: [1, 2, 3, 4],
+        midiOutCcChannels: [1, 2, 3, 4],
+        midiOutCcModes: ["multi", "multi", "multi", "multi"],
+        midiOutCcScaling: [true, true, true, true],
+        midiOutCcNumbers: [
+          1, 2, 3, 7, 10, 11, 12,
+          1, 2, 3, 7, 10, 11, 12,
+          1, 2, 3, 7, 10, 11, 12,
+          1, 2, 3, 7, 10, 11, 12,
+        ],
+      },
+    }, // MidiSync @ 24 PPQN (divisor 1), with historical MIDI-editor routing defaults
     { kind: "lsdj-assets", config: { overrides: [] } }, // empty asset-override manifest until the user replaces one
   ]);
   // Older ROMs stamp an uppercase "LSDJ" title — must still match.
